@@ -1,0 +1,7 @@
+import type { EventLocale } from "@event-platform/shared-types";
+interface ChatCopy { label: string; title: string; hint: string; older: string; loading: string; empty: string; organizer: string; guest: string; yourMessage: string; sending: string; send: string; failed: string; retry: string; }
+export const ORDER_CHAT_COPY: Record<EventLocale, ChatCopy> = {
+  ru: { label: "Переписка по заказу", title: "Сообщения по заказу", hint: "Задайте организатору вопрос о мероприятии или заказе.", older: "Загрузить предыдущие сообщения", loading: "Загрузка сообщений…", empty: "Сообщений пока нет.", organizer: "Организатор", guest: "Гость", yourMessage: "Ваше сообщение", sending: "Отправляем…", send: "Отправить", failed: "Не удалось загрузить сообщения", retry: "Повторить" },
+  kk: { label: "Тапсырыс бойынша хат алмасу", title: "Тапсырыс хабарлары", hint: "Ұйымдастырушыға іс-шара немесе тапсырыс туралы сұрақ қойыңыз.", older: "Ертерек хабарларды көрсету", loading: "Хабарлар жүктелуде…", empty: "Әзірге хабар жоқ.", organizer: "Ұйымдастырушы", guest: "Қонақ", yourMessage: "Хабарыңыз", sending: "Жіберілуде…", send: "Жіберу", failed: "Хабарларды жүктеу мүмкін болмады", retry: "Қайталау" },
+  en: { label: "Order conversation", title: "Order messages", hint: "Ask the organizer about your event or order.", older: "Show earlier messages", loading: "Loading messages…", empty: "No messages yet.", organizer: "Organizer", guest: "Guest", yourMessage: "Your message", sending: "Sending…", send: "Send", failed: "Could not load messages", retry: "Retry" },
+};

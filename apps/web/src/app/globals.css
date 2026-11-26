@@ -1,0 +1,226 @@
+@import "tailwindcss";
+@import "../components/theme.css";
+@import "../components/site.css";
+@import "../styles/tk-shared.css";
+@import "../styles/tk-home.css";
+@import "../styles/tk-event.css";
+@import "../styles/tk-account.css";
+@import "../styles/tk-organizer.css";
+@import "../styles/tk-bridge.css";
+@import "../styles/tk-legacy.css";
+@import "../components/rich-text.css";
+@import "../components/account.css";
+@import "../components/organizer-workspace.css";
+@import "./(auth)/login/login.css";
+
+@font-face {
+  font-family: "TICKET Inter";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/auth/fonts/inter-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "TICKET Inter";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/auth/fonts/inter-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "TICKET Inter";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/auth/fonts/inter-cyrillic.woff2") format("woff2");
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+
+@font-face {
+  font-family: "TICKET Inter";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/auth/fonts/inter-cyrillic-ext.woff2") format("woff2");
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+
+.ticket-auth {
+  font-family: "TICKET Inter", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.ticket-auth-wordmark {
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+:root {
+  color-scheme: light;
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--ticket-bg);
+  color: var(--ticket-text);
+}
+
+::selection {
+  background: #d3bbff;
+  color: #250059;
+}
+
+.eyebrow {
+  color: #6366f1;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.material-symbols-outlined {
+  font-family: "Material Symbols Outlined";
+  font-style: normal;
+  font-weight: 400;
+  letter-spacing: normal;
+  line-height: 1;
+  text-transform: none;
+  white-space: nowrap;
+  overflow-wrap: normal;
+  direction: ltr;
+  -webkit-font-feature-settings: "liga";
+  -webkit-font-smoothing: antialiased;
+  font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
+}
+
+button,
+a,
+input,
+select,
+textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.price-range-input {
+  appearance: none;
+  background: transparent;
+  pointer-events: none;
+}
+
+.price-range-input::-webkit-slider-runnable-track {
+  height: 6px;
+  background: transparent;
+}
+
+.price-range-input::-moz-range-track {
+  height: 6px;
+  background: transparent;
+}
+
+.price-range-input::-webkit-slider-thumb {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  margin-top: -6px;
+  border: 3px solid #6320ee;
+  border-radius: 50%;
+  background: white;
+  box-shadow: 0 2px 7px rgba(40, 28, 71, 0.2);
+  cursor: grab;
+  pointer-events: auto;
+}
+
+.price-range-input::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 3px solid #6320ee;
+  border-radius: 50%;
+  background: white;
+  box-shadow: 0 2px 7px rgba(40, 28, 71, 0.2);
+  cursor: grab;
+  pointer-events: auto;
+}
+
+.price-range-input:focus-visible::-webkit-slider-thumb {
+  outline: 3px solid #c4b5fd;
+  outline-offset: 3px;
+}
+
+.price-range-input:focus-visible::-moz-range-thumb {
+  outline: 3px solid #c4b5fd;
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+.ticket-navbar-account .organizer-verified-mark,
+.ticket-navbar-profile .organizer-verified-mark {
+  color: white;
+  --organizer-verified-check: #4f16c8;
+}
+.ticket-navbar-profile .organizer-verified-mark {
+  position: absolute;
+  right: -3px;
+  bottom: -2px;
+  padding: 1px;
+  border-radius: 50%;
+  background: var(--ticket-primary);
+}
+.ticket-navbar-profile .organizer-verified-mark svg { width: 13px; height: 13px; }
+
+/* Mobile navigation and catalog layout. */
+@media (max-width: 767px) {
+  /* One visible row of navigation, followed by search and event creation. */
+  .ticket-navbar { padding-inline: 12px; }
+  .ticket-navbar-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) 42px repeat(4, 32px); column-gap: 4px; row-gap: 4px; padding: 6px 0 10px; }
+  .ticket-navbar-identity, .ticket-navbar-actions { display: contents; }
+  .ticket-navbar-brand { grid-area: 1 / 1; justify-content: center; min-height: 36px; }
+  .ticket-navbar-brand > span { display: none; }
+  .ticket-navbar-brand .account-icon { width: 24px; height: 24px; }
+  .ticket-navbar .ticket-location-picker-navbar { grid-area: 1 / 2; margin-left: 6px; }
+  .ticket-navbar .ticket-location-picker-navbar > button { width: 100%; max-width: none; min-height: 36px; padding: 0; gap: 3px; font-size: 11px; }
+  .ticket-navbar .ticket-location-label { display: inline; min-width: 0; }
+  .ticket-navbar .ticket-location-picker-navbar > button > svg { width: 13px; height: 13px; }
+  .ticket-navbar-language { display: block; grid-area: 1 / 3; }
+  .ticket-navbar-language button[aria-haspopup=listbox] { min-height: 36px; width: 42px; padding: 0; gap: 2px; justify-content: center; font-size: 10px; }
+  .ticket-navbar-language button[aria-haspopup=listbox] > span { gap: 0; }
+  .ticket-navbar-language button[aria-haspopup=listbox] > span > svg, .ticket-navbar-language .ticket-picker-label { display: none; }
+  .ticket-navbar-language .ticket-picker-compact-label { display: inline; }
+  .ticket-navbar-language button[aria-haspopup=listbox] > svg { width: 12px; height: 12px; }
+  .ticket-navbar-language [role=listbox] { position: fixed; top: 48px; left: auto; right: 12px; }
+  .ticket-navbar-favorites { grid-area: 1 / 4; width: 32px; height: 36px; }
+  .ticket-navbar .ticket-theme-toggle { grid-area: 1 / 5; width: 32px; height: 36px; }
+  .ticket-navbar-profile { display: grid; grid-area: 1 / 7; width: 32px; height: 32px; align-self: center; }
+  .ticket-navbar-menu-toggle, .ticket-navbar-menu, .ticket-navbar-account, .ticket-navbar-logout { display: none; }
+  .ticket-navbar .ticket-header-search { grid-area: 2 / 1 / 3 / -1; order: 0; width: calc((100% - 8px) * 2 / 3); height: 40px; margin: 0; padding-left: 12px; }
+  .ticket-navbar .ticket-header-search input { font-size: 12px; }
+  .ticket-navbar .ticket-header-search button { margin-left: 4px; }
+  .ticket-navbar-create { display: inline-flex; grid-area: 2 / 1 / 3 / -1; justify-self: end; width: calc((100% - 8px) / 3); min-width: 0; min-height: 40px; padding-inline: 7px; gap: 4px; font-size: 11px; }
+  .ticket-navbar-create-label { display: none; }
+  .ticket-navbar-create-compact { display: inline; }
+  .ticket-navbar-create > svg { width: 14px; height: 14px; }
+
+  .ticket-catalog-skeleton > div:first-child { height: 220px; }
+  .ticket-catalog-skeleton > div:last-child { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .ticket-catalog-skeleton > div:last-child > div { height: 240px; }
+
+
+}
+
+@media (min-width: 640px) {
+  .ticket-location-suggestion { position: absolute; left: 50%; top: 100%; transform: translateX(-50%); width: 300px; margin-top: 14px; box-shadow: 0 12px 36px rgb(39 20 77 / .14); }
+  .ticket-location-suggestion::before { content: ""; position: absolute; top: -6px; left: calc(50% - 6px); width: 12px; height: 12px; background: inherit; border-top: 1px solid var(--ticket-border); border-left: 1px solid var(--ticket-border); transform: rotate(45deg); }
+}

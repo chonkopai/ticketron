@@ -1,0 +1,245 @@
+/* Site design language for the remaining utility-class pages (organizer event workspace, receipts, payment,
+   chats, ticket detail). Applied only inside .tk-skin so the redesigned pages are not affected.
+   Unlayered rules win over Tailwind's utility layer, so markup and behaviour stay unchanged. */
+
+.tk-skin { color: var(--tk-text); }
+
+/* Page surfaces: let the site backdrop (glows) show through */
+.tk-skin.organizer-event-workspace, .tk-skin .organizer-event-page, .tk-skin main[class*="bg-ticket-bg"], .tk-skin > main { background: transparent; }
+.tk-skin .organizer-event-page { max-width: 1240px; padding-top: 28px; padding-bottom: 64px; }
+
+/* Headings */
+.tk-skin h1 { font-weight: 750; letter-spacing: -0.03em; line-height: 1.12; }
+.tk-skin h1[class*="text-[28px]"], .tk-skin h1[class*="text-3xl"], .tk-skin h1[class*="text-2xl"] { font-size: clamp(26px, 3vw, 34px); }
+.tk-skin h2 { letter-spacing: -0.02em; }
+.tk-skin h2:is(.text-xl, .text-lg, .text-2xl) { font-weight: 700; }
+
+/* Cards: borderless, large radius, soft shadow */
+.tk-skin :is(section, article, div, form, aside, details, header):is([class*="rounded-2xl"], [class*="rounded-3xl"]):is(.border, [class*="bg-ticket-surface"], [class*="bg-white"]),
+.tk-skin :is(section, article, form, aside).rounded-xl.border[class*="bg-ticket-surface"],
+.tk-skin .account-card {
+  border-color: transparent;
+  border-radius: 24px;
+  background-color: var(--tk-surface);
+  box-shadow: var(--tk-card-shadow);
+}
+:root[data-theme="dark"] .tk-skin :is(section, article, div, form, aside, details, header):is([class*="rounded-2xl"], [class*="rounded-3xl"]):is(.border, [class*="bg-ticket-surface"], [class*="bg-white"]),
+:root[data-theme="dark"] .tk-skin .account-card { border-color: var(--tk-border); }
+
+/* Inner wells: bordered blocks inside cards become soft raised panels */
+.tk-skin :is([class*="rounded-2xl"], [class*="rounded-3xl"]) :is(div, li, article, section, details, label):is(.rounded-xl, .rounded-lg, [class*="rounded-2xl"]).border:not([class*="bg-ticket-surface"]):not([class*="-soft"]):not(:has(> input, > select, > textarea)) {
+  border-color: transparent;
+  border-radius: 18px;
+  background-color: var(--tk-raised);
+}
+.tk-skin :is([class*="rounded-2xl"], [class*="rounded-3xl"]) :is(div, li, article, section, details, label):is(.rounded-xl, .rounded-lg, [class*="rounded-2xl"])[class*="bg-ticket-surface"].border {
+  border-color: transparent;
+  border-radius: 18px;
+  background-color: var(--tk-raised);
+}
+.tk-skin [class*="rounded-2xl"][class*="bg-ticket-bg"], .tk-skin [class*="rounded-xl"][class*="bg-ticket-bg"]:not(input, textarea, select) { border-radius: 18px; background-color: var(--tk-raised); }
+.tk-skin :is(div, p, li, details, summary)[class*="bg-ticket-raised"]:is(.rounded-lg, .rounded-xl, [class*="rounded-2xl"]) { border-radius: 16px; }
+
+/* Notices */
+.tk-skin :is(div, p, section, li)[class*="-soft"]:is(.rounded-lg, .rounded-xl, [class*="rounded-2xl"], .border, [class*="p-3"], [class*="p-4"]) {
+  border-color: transparent;
+  border-radius: 16px;
+}
+
+/* Buttons: pills */
+.tk-skin :is(button, a):is(.rounded, .rounded-md, .rounded-lg, .rounded-xl, [class*="rounded-2xl"]):is([class*="px-"], [class*="py-"], [class*="h-"]):not(.text-left):not([role="tab"]):not([class*="w-full"][class*="p-4"]),
+.tk-skin .organizer-event-secondary-button {
+  border-radius: 999px;
+}
+.tk-skin :is(button, a)[class*="bg-ticket-primary"] {
+  border-radius: 999px;
+  box-shadow: 0 10px 24px -12px color-mix(in srgb, var(--tk-primary) 70%, transparent);
+  transition: background-color .2s, transform .15s, box-shadow .2s;
+}
+.tk-skin :is(button, a)[class*="bg-ticket-primary"]:active:not(:disabled) { transform: scale(.98); }
+.tk-skin :is(button, a).border:not([class*="-soft"]):not([class*="bg-ticket-primary"]),
+.tk-skin .organizer-event-secondary-button {
+  border-color: var(--tk-border);
+  background-color: var(--tk-surface);
+  transition: border-color .2s, background-color .2s, transform .15s;
+}
+.tk-skin :is(button, a).border:not([class*="-soft"]):not([class*="bg-ticket-primary"]):hover:not(:disabled),
+.tk-skin .organizer-event-secondary-button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--tk-accent) 40%, var(--tk-border));
+  background-color: var(--tk-surface);
+}
+.tk-skin :is(button, a).border:active:not(:disabled), .tk-skin .organizer-event-secondary-button:active:not(:disabled) { transform: scale(.98); }
+.tk-skin :is(button, a)[class*="bg-ticket-raised"] { background-color: var(--tk-accent-soft); color: var(--tk-accent); }
+.tk-skin :is(button, a)[class*="bg-ticket-raised"]:hover:not(:disabled) { background-color: color-mix(in srgb, var(--tk-accent) 16%, var(--tk-surface)); }
+
+/* Segmented controls (role=tab / aria-pressed groups) */
+.tk-skin [role="tablist"] { border-radius: 999px; }
+.tk-skin [role="tablist"] > [role="tab"] { border-radius: 999px; }
+
+/* Form fields */
+.tk-skin :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]), select, textarea) {
+  border-color: transparent;
+  border-radius: 14px;
+  background-color: var(--tk-raised);
+  color: var(--tk-text);
+  transition: background-color .2s, border-color .2s, box-shadow .2s;
+}
+.tk-skin textarea { border-radius: 18px; }
+.tk-skin :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]), select, textarea):focus {
+  border-color: var(--tk-accent);
+  background-color: var(--tk-surface);
+  outline: none;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--tk-accent) 16%, transparent);
+}
+.tk-skin :is(input, select, textarea):disabled { opacity: .6; }
+.tk-skin :is(input[type="checkbox"], input[type="radio"], input[type="range"]) { accent-color: var(--tk-primary); }
+/* Field groups that wrap an input in a bordered box */
+.tk-skin :is(div, label):is(.rounded-lg, .rounded-xl).border:has(> input, > select, > textarea) { border-color: transparent; border-radius: 14px; background-color: var(--tk-raised); }
+.tk-skin :is(div, label):is(.rounded-lg, .rounded-xl).border:has(> input, > select, > textarea) > :is(input, select, textarea) { background-color: transparent; box-shadow: none; }
+
+/* Tables */
+.tk-skin table { border-collapse: separate; border-spacing: 0; }
+.tk-skin thead tr > * { background: var(--tk-raised); border: 0; }
+.tk-skin thead tr > :first-child { border-radius: 14px 0 0 14px; }
+.tk-skin thead tr > :last-child { border-radius: 0 14px 14px 0; }
+.tk-skin tbody tr > * { border-color: var(--tk-border); }
+.tk-skin tbody tr:hover > * { background: color-mix(in srgb, var(--tk-raised) 55%, transparent); }
+
+/* Badges and chips */
+.tk-skin :is(span, p, b, strong)[class*="rounded-full"][class*="px-"] { letter-spacing: .01em; }
+
+/* Disclosure summaries */
+.tk-skin summary { border-radius: 14px; }
+
+/* Full-page wrappers that paint the old flat background */
+.tk-skin[class*="min-h-screen"][class*="bg-ticket-bg"], .tk-skin [class*="min-h-screen"][class*="bg-ticket-bg"], .tk-skin [class*="min-h-screen"][class*="bg-white"] { background: transparent; }
+
+/* Custom dropdown triggers look like the other fields */
+.tk-skin button[aria-haspopup]:is(.border, [class*="rounded-"]):not([class*="bg-ticket-primary"]) { border-color: transparent; border-radius: 14px; background-color: var(--tk-raised); }
+.tk-skin button[aria-haspopup]:is(.border, [class*="rounded-"]):not([class*="bg-ticket-primary"]):hover:not(:disabled) { border-color: transparent; background-color: var(--tk-hover); }
+
+/* Back link: soft accent pill (used across the site) */
+.tk-back-link { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px 0 10px; border-radius: 999px; background: var(--tk-accent-soft); color: var(--tk-accent); font-size: 13.5px; font-weight: 600; text-decoration: none; transition: background-color .2s, transform .15s; }
+.tk-back-link:hover { background: color-mix(in srgb, var(--tk-accent) 16%, var(--tk-surface)); }
+.tk-back-link:active { transform: scale(.98); }
+.tk-back-link:focus-visible { outline: 2px solid var(--tk-accent); outline-offset: 3px; }
+
+/* Organizer · purchases */
+.tk-purchases { display: grid; gap: 18px; align-content: start; }
+.tk-purchases > .tk-back-link { justify-self: start; }
+.tk-purchases-head h1 { margin: 0; font-size: clamp(26px, 3vw, 34px); }
+.tk-purchases-note { margin: 0; padding: 18px 20px; border-radius: 20px; background: var(--tk-surface); box-shadow: var(--tk-card-shadow); color: var(--tk-muted); }
+.tk-purchases-note.is-error { background: var(--ticket-danger-soft); color: var(--ticket-danger); box-shadow: none; }
+.tk-purchases-list { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.tk-purchase { display: flex; align-items: center; gap: 14px; padding: 16px 18px; border-radius: 22px; background: var(--tk-surface); box-shadow: var(--tk-card-shadow); }
+:root[data-theme="dark"] .tk-purchase { border: 1px solid var(--tk-border); }
+.tk-purchase-ava { display: grid; place-items: center; flex: none; width: 44px; height: 44px; border-radius: 14px; background: var(--tk-accent-soft); color: var(--tk-accent); font-weight: 700; }
+.tk-purchase-main { flex: 1; min-width: 0; }
+.tk-purchase-main h2 { margin: 0; font-size: 15px; font-weight: 650; }
+.tk-purchase-main p { margin: 2px 0 0; font-size: 13px; color: var(--tk-muted); }
+.tk-purchase-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.tk-purchase-chips span { height: 26px; display: inline-flex; align-items: center; padding: 0 10px; border-radius: 999px; background: var(--tk-raised); font-size: 12px; color: var(--tk-muted); }
+.tk-purchase-sum { display: grid; justify-items: end; gap: 6px; text-align: right; }
+.tk-purchase-sum b { font-size: 16px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tk-purchase-sum span { height: 24px; display: inline-flex; align-items: center; padding: 0 10px; border-radius: 999px; background: var(--tk-raised); font-size: 12px; font-weight: 600; color: var(--tk-muted); }
+.tk-purchase-sum span.is-paid { background: var(--tk-success-soft); color: var(--tk-success); }
+.tk-purchases-pager { display: flex; align-items: center; gap: 10px; }
+.tk-purchases-pager > span { min-width: 36px; height: 36px; display: grid; place-items: center; border-radius: 999px; background: var(--tk-surface); box-shadow: var(--tk-card-shadow); font-weight: 650; }
+@media (max-width: 560px) { .tk-purchase { flex-wrap: wrap; } .tk-purchase-sum { width: 100%; grid-auto-flow: column; justify-content: space-between; } }
+
+/* Organizer · review of an event in the previous format */
+.tk-review { display: grid; gap: 16px; align-content: start; max-width: 920px !important; }
+.tk-review > .tk-back-link { justify-self: start; }
+.tk-review-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.tk-review-eyebrow { margin: 0 0 6px; font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--tk-accent); }
+.tk-review-head h1 { margin: 0; font-size: clamp(26px, 3vw, 34px); }
+.tk-review-note { margin: 0; padding: 14px 18px; border-radius: 18px; background: var(--tk-accent-soft); color: var(--tk-text); font-size: 14px; }
+.tk-review-note.is-warning { background: var(--ticket-warning-soft); color: var(--ticket-warning); }
+.tk-review-note.is-error { background: var(--ticket-danger-soft); color: var(--ticket-danger); }
+.tk-review-note.is-success { background: var(--tk-success-soft); color: var(--tk-success); }
+.tk-review-form { display: grid; gap: 18px; padding: 24px; border-radius: 28px; background: var(--tk-surface); box-shadow: var(--tk-card-shadow); }
+:root[data-theme="dark"] .tk-review-form { border: 1px solid var(--tk-border); }
+.tk-review-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.tk-review-field { display: grid; gap: 6px; min-width: 0; }
+.tk-review-fields > .is-wide { grid-column: 1 / -1; }
+.tk-review-field > span { font-size: 13px; font-weight: 600; }
+.tk-review-field :is(input, textarea) { width: 100%; min-height: 46px; padding: 0 14px; font: inherit; font-size: 14.5px; }
+.tk-review-field textarea { padding: 12px 14px; resize: vertical; }
+.tk-review-more { grid-column: 1 / -1; }
+.tk-review-more > summary { display: inline-flex; align-items: center; height: 38px; padding: 0 14px; background: var(--tk-raised); border-radius: 999px; font-size: 13.5px; font-weight: 600; cursor: pointer; list-style: none; }
+.tk-review-more[open] > summary { margin-bottom: 14px; }
+.tk-review-actions { display: flex; justify-content: flex-end; }
+.tk-review-submit { height: 46px; padding: 0 22px; border: 0; border-radius: 999px; background: var(--tk-primary); color: #fff; font-weight: 600; cursor: pointer; box-shadow: 0 10px 24px -12px color-mix(in srgb, var(--tk-primary) 70%, transparent); }
+.tk-review-submit:hover:not(:disabled) { background: var(--tk-primary-hover); }
+.tk-review-submit:disabled { opacity: .5; cursor: default; }
+@media (max-width: 640px) { .tk-review-fields { grid-template-columns: minmax(0, 1fr); } .tk-review-form { padding: 18px; border-radius: 24px; } }
+
+/* ================= Status pages (Telegram callback, payment, quick purchase, 404) ================= */
+.tk-status-page { position: relative; z-index: 1; display: grid; place-items: center; min-height: calc(100svh - 64px); padding: 48px 16px 64px; }
+.tk-status-card { width: min(460px, 100%); display: grid; justify-items: center; gap: 12px; padding: 36px 28px 28px; border-radius: 32px; background: var(--tk-surface); box-shadow: var(--tk-card-shadow); text-align: center; animation: tk-status-in .4s cubic-bezier(.3, .7, .2, 1) both; }
+.tk-status-card.is-wide { width: min(640px, 100%); text-align: left; justify-items: stretch; }
+:root[data-theme="dark"] .tk-status-card { border: 1px solid var(--tk-border); }
+@keyframes tk-status-in { from { opacity: 0; transform: translateY(8px) scale(.98); } }
+.tk-status-ico { display: grid; place-items: center; width: 64px; height: 64px; border-radius: 22px; background: var(--tk-accent-soft); color: var(--tk-accent); }
+.tk-status-ico svg { width: 30px; height: 30px; }
+.tk-status-ico.is-ok { background: var(--tk-success-soft); color: var(--tk-success); }
+.tk-status-ico.is-error { background: var(--ticket-danger-soft); color: var(--ticket-danger); }
+.tk-status-ico.is-wait { background: var(--tk-accent-soft); color: var(--tk-accent); }
+.tk-status-card h1 { margin: 6px 0 0; font-size: 26px; font-weight: 750; letter-spacing: -0.03em; line-height: 1.15; }
+.tk-status-text { display: inline-flex; align-items: center; justify-content: center; gap: 10px; margin: 0; font-size: 15px; line-height: 1.55; color: var(--tk-muted); }
+.tk-status-text.is-error { color: var(--ticket-danger); }
+.tk-status-actions { display: grid; gap: 8px; width: 100%; margin-top: 8px; }
+.tk-status-link { margin-top: 4px; font-size: 14px; font-weight: 600; color: var(--tk-accent); text-decoration: none; }
+.tk-status-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.tk-status-spinner { width: 18px; height: 18px; border-radius: 50%; border: 2.5px solid color-mix(in srgb, var(--tk-accent) 25%, transparent); border-top-color: var(--tk-accent); animation: tk-spin .8s linear infinite; }
+@keyframes tk-spin { to { transform: rotate(360deg); } }
+.tk-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 48px; padding: 0 22px; border: 1px solid transparent; border-radius: 999px; font-size: 15px; font-weight: 600; text-decoration: none; cursor: pointer; transition: background-color .2s, border-color .2s, transform .15s; }
+.tk-btn:active { transform: scale(.98); }
+.tk-btn-primary { background: var(--tk-primary); color: #fff; box-shadow: 0 10px 24px -12px color-mix(in srgb, var(--tk-primary) 70%, transparent); }
+.tk-btn-primary:hover { background: var(--tk-primary-hover); }
+.tk-btn-ghost { border-color: var(--tk-border); background: var(--tk-surface); color: var(--tk-text); }
+.tk-btn-ghost:hover { border-color: color-mix(in srgb, var(--tk-accent) 40%, var(--tk-border)); }
+.tk-btn-soft { background: var(--tk-accent-soft); color: var(--tk-accent); }
+@media (prefers-reduced-motion: reduce) { .tk-status-card { animation: none; } }
+.tk-status-box { width: 100%; display: grid; gap: 4px; justify-items: center; padding: 16px 18px; border-radius: 20px; background: var(--tk-raised); text-align: center; }
+.tk-status-box b { font-size: 18px; letter-spacing: -0.01em; }
+.tk-status-box p { margin: 0; font-size: 14px; color: var(--tk-muted); }
+.tk-status-box p b { font-size: inherit; color: var(--tk-text); }
+.tk-status-box .is-small { font-size: 12.5px; }
+.tk-status-box .tk-btn { margin-top: 8px; min-height: 42px; }
+.tk-status-box.is-soft { background: var(--tk-accent-soft); }
+button.tk-status-link { border: 0; background: none; padding: 0; cursor: pointer; font: inherit; font-size: 14px; font-weight: 600; color: var(--tk-accent); }
+button.tk-status-link:disabled { opacity: .5; cursor: default; }
+.tk-status-code { margin: 0; font-size: 72px; font-weight: 800; line-height: 1; letter-spacing: -0.05em; background: linear-gradient(135deg, var(--tk-primary), #ec4899); -webkit-background-clip: text; background-clip: text; color: transparent; }
+
+/* Shared page states (favourites, catalog) */
+.tk-section-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px; }
+.tk-section-head h1 { margin: 0; font-size: clamp(30px, 4vw, 42px); font-weight: 750; letter-spacing: -0.04em; line-height: 1.05; }
+.tk-section-head p { margin: 10px 0 0; max-width: 640px; font-size: 16px; color: var(--tk-muted); }
+.tk-section-head .tk-section-eyebrow { margin: 0 0 8px; font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--tk-accent); }
+.tk-empty-state { display: grid; justify-items: center; gap: 8px; padding: 48px 24px; border-radius: 28px; background: var(--tk-surface); box-shadow: var(--tk-card-shadow); text-align: center; }
+:root[data-theme="dark"] .tk-empty-state { border: 1px solid var(--tk-border); }
+.tk-empty-ico { display: grid; place-items: center; width: 60px; height: 60px; margin-bottom: 6px; border-radius: 20px; background: var(--tk-accent-soft); color: var(--tk-accent); }
+.tk-empty-ico svg { width: 28px; height: 28px; }
+.tk-empty-state h2 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
+.tk-empty-state p { margin: 0; max-width: 420px; font-size: 14.5px; line-height: 1.55; color: var(--tk-muted); }
+.tk-empty-action { margin-top: 10px; }
+.tk-error-state { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 18px; border-radius: 20px; background: var(--ticket-danger-soft); color: var(--ticket-danger); }
+.tk-error-state p { margin: 0; font-size: 14.5px; }
+.tk-error-state .tk-btn { min-height: 40px; padding: 0 18px; font-size: 14px; }
+.tk-fav-pager { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 28px; }
+.tk-fav-pager > span { font-size: 14px; color: var(--tk-muted); }
+.tk-fav-pager .tk-btn { min-height: 42px; font-size: 14px; }
+.tk-fav-pager .tk-btn:disabled { opacity: .4; cursor: default; }
+.tk-fav-embedded-title { margin: 0; font-size: 24px; font-weight: 750; letter-spacing: -0.03em; }
+.tk-grid.tk-fav-grid { grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); }
+.tk-fav-grid .tk-foot { flex-wrap: wrap; }
+@media (max-width: 560px) { .tk-grid.tk-fav-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* Guest receipt (quick purchase): borderless cards like the rest of the site */
+.quick-receipt-card, .quick-receipt-ticket { border-color: transparent !important; box-shadow: var(--tk-card-shadow) !important; }
+.quick-receipt-card { border-radius: 28px !important; }
+:root[data-theme="dark"] :is(.quick-receipt-card, .quick-receipt-ticket) { border-color: var(--tk-border) !important; }
+.quick-receipt-back { border-radius: 999px !important; background: var(--tk-accent-soft); padding: 0 16px 0 12px !important; min-height: 38px !important; margin-inline-start: 0 !important; }
+.quick-receipt-refresh, .quick-receipt-button { border-radius: 999px !important; }
+.quick-receipt-error { border-radius: 18px; }

@@ -1,0 +1,114 @@
+import "../test-support/require-test-database.js";
+import { randomUUID } from "node:crypto";
+
+import { prisma } from "@event-platform/database";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+import { AccountService, cancelPendingTelegramNotifications } from "./account.service.js";
+import { OrganizerPhotoService } from "./organizer-photo.service.js";
+import type { ObjectStorage, PutPosterInput } from "../events/object-storage.js";
+
+const guestId = randomUUID();
+const otherId = randomUUID();
+const organizerId = randomUUID();
+const eventId = randomUUID();
+const orderIds: string[] = [];
+
+beforeAll(async () => {
+  const telegramBase = BigInt(Date.now()) * 100n;
+  await prisma.user.createMany({ data: [
+    { id: guestId, telegramId: telegramBase + 1n, role: "guest", name: "Гость" },
+    { id: otherId, telegramId: telegramBase + 2n, role: "guest", name: "Другой" },
+    { id: organizerId, telegramId: telegramBase + 3n, role: "organizer", name: "Организатор" },
+  ] });
+  await prisma.event.create({ data: { id: eventId, organizerId, title: "Тестовое событие", status:"published", category: "music", city: "Алматы", date: new Date("2027-04-20T00:00:00Z"), time: new Date("1970-01-01T19:00:00Z"), timezone: "Asia/Almaty", address: "Адрес" } });
+  const type = await prisma.ticketType.create({ data: { eventId, name: "Стандарт", price: 100_000, currency: "KZT", quantityTotal: 10, quantitySold: 3, status: "active" } });
+  await prisma.event.update({where:{id:eventId},data:{approvedAt:new Date(),moderationStatus:"approved"}});
+  const activeOrder = await prisma.order.create({ data: { type: "ticket", buyerUserId: guestId, amount: 100_000, currency: "KZT", paymentStatus: "paid", checkoutSnapshot: { eventId, eventTitle: "Историческое название", itemName: "Стандарт", quantity: 1 } } });
+  const usedOrder = await prisma.order.create({ data: { type: "ticket", buyerUserId: guestId, amount: 200_000, currency: "KZT", paymentStatus: "paid", checkoutSnapshot: { eventId, eventTitle: "Тестовое событие", itemName: "Стандарт", quantity: 2 } } });
+  const otherOrder = await prisma.order.create({ data: { type: "ticket", buyerUserId: otherId, amount: 900_000, currency: "KZT", paymentStatus: "paid", checkoutSnapshot: { eventId, eventTitle: "Чужой заказ", itemName: "VIP" } } });
+  orderIds.push(activeOrder.id, usedOrder.id, otherOrder.id);
+  await prisma.ticket.createMany({ data: [
+    { ticketTypeId: type.id, orderId: activeOrder.id, ownerUserId: guestId, qrToken: randomUUID(), status: "active" },
+    { ticketTypeId: type.id, orderId: usedOrder.id, ownerUserId: guestId, qrToken: randomUUID(), status: "used", usedAt: new Date() },
+    { ticketTypeId: type.id, orderId: usedOrder.id, ownerUserId: guestId, qrToken: randomUUID(), status: "used", usedAt: new Date() },
+  ] });
+});
+
+afterAll(async () => {
+  await prisma.event.deleteMany({ where: { id: eventId } });
+  await prisma.order.deleteMany({ where: { id: { in: orderIds } } });
+  await prisma.notification.deleteMany({ where: { userId: guestId } });
+  await prisma.auditLog.deleteMany({ where: { actorId: { in: [guestId, organizerId] } } });
+  await prisma.outboxEvent.deleteMany({ where: { aggregateId: { in: [guestId, organizerId] } } });
+  await prisma.user.deleteMany({ where: { id: { in: [guestId, otherId, organizerId] } } });
+  await prisma.$disconnect();
+});
+
+describe("AccountService", () => {
+  const service = new AccountService(prisma);
+
+  it("calculates active admissions and distinct attended events", async () => {
+    await expect(service.dashboard(guestId)).resolves.toEqual({ activeAdmissions: 1, attendedEvents: 1 });
+  });
+
+  it("returns safe defaults and persists allowlisted notification preferences", async () => {
+    await expect(service.preferences(guestId)).resolves.toEqual({ transactionalTicketDelivery: true, eventReminders: true, marketingAnnouncements: false });
+    await expect(service.updatePreferences(guestId, { marketingAnnouncements: true })).resolves.toMatchObject({ marketingAnnouncements: true, transactionalTicketDelivery: true });
+    await expect(prisma.auditLog.count({ where: { actorId: guestId, action: "notification_preferences.updated" } })).resolves.toBe(1);
+    await expect(prisma.outboxEvent.count({ where: { aggregateId: guestId, eventType: "notification_preferences.updated" } })).resolves.toBe(1);
+  });
+
+  it("cancels pending reminders at once when reminders are turned off, and leaves other types alone", async () => {
+    const chat = BigInt(Date.now()) * 100n + 9n;
+    await prisma.user.update({ where: { id: guestId }, data: { telegramChatId: chat } });
+    const base = { userId: guestId, telegramId: chat, channel: "telegram" as const, payload: { text: "x", eventId }, nextAttemptAt: new Date(Date.now() + 3_600_000) };
+    const reminder = await prisma.notification.create({ data: { ...base, type: "event.reminder", recipientKey: `user:${guestId}` } });
+    const other = await prisma.notification.create({ data: { ...base, type: "event.change", recipientKey: `chat:${chat}` } });
+    await service.updatePreferences(guestId, { eventReminders: false });
+    await expect(prisma.notification.findUniqueOrThrow({ where: { id: reminder.id } })).resolves.toMatchObject({ status: "failed", lastError: "RECIPIENT_PREFERENCE_OR_LINK_CHANGED", nextAttemptAt: null });
+    await expect(prisma.notification.findUniqueOrThrow({ where: { id: other.id } })).resolves.toMatchObject({ status: "pending" });
+    await prisma.notification.deleteMany({ where: { id: { in: [reminder.id, other.id] } } });
+    await service.updatePreferences(guestId, { eventReminders: true });
+  });
+
+  it("cancels pending Telegram notifications for a chat that is no longer linked", async () => {
+    const oldChat = BigInt(Date.now()) * 100n + 8n;
+    const row = await prisma.notification.create({ data: { userId: guestId, telegramId: oldChat, channel: "telegram", type: "event.reminder", recipientKey: `user:${guestId}`, payload: { text: "x", eventId }, nextAttemptAt: new Date() } });
+    await prisma.$transaction((tx) => cancelPendingTelegramNotifications(tx, guestId, { NOT: { telegramId: oldChat + 1n } }));
+    await expect(prisma.notification.findUniqueOrThrow({ where: { id: row.id } })).resolves.toMatchObject({ status: "failed", lastError: "RECIPIENT_PREFERENCE_OR_LINK_CHANGED" });
+    await prisma.notification.delete({ where: { id: row.id } });
+  });
+
+  it("scopes order history to the buyer and presents immutable snapshot labels", async () => {
+    const result = await service.orders(guestId, { page: 1, limit: 20 });
+    expect(result.total).toBe(2);
+    expect(result.items.map(({ eventTitle }) => eventTitle)).toContain("Историческое название");
+    expect(result.items.some(({ eventTitle }) => eventTitle === "Чужой заказ")).toBe(false);
+    expect(result.items.every(({ receiptUrl }) => receiptUrl === null)).toBe(true);
+  });
+
+  it("persists an organizer display identity with audit and outbox records", async () => {
+    await expect(service.updateOrganizerProfile(organizerId, { organizationName: "  TICKET Studio  ", email: "studio@example.com", phone: "+77001234567", address: "Алматы", showContactInfo: true })).resolves.toMatchObject({ organizationName: "TICKET Studio", email: "studio@example.com", phone: "+77001234567", address: "Алматы", showContactInfo: true });
+    await expect(service.organizerProfile(organizerId, null)).resolves.toMatchObject({ organizationName: "TICKET Studio", email: "studio@example.com", address: "Алматы", showContactInfo: true });
+    await expect(prisma.auditLog.count({ where: { actorId: organizerId, action: "organizer_profile.updated" } })).resolves.toBe(1);
+  });
+
+  it("validates and stores organizer photos without retaining the previous managed image", async () => {
+    const deleted: string[] = [];
+    let sequence = 0;
+    const storage: ObjectStorage = {
+      async putPoster(_image: PutPosterInput) { const key = `${randomUUID()}.png`; sequence += 1; return { key, url: `/media/posters/${key}` }; },
+      async readPoster() { return { body: Buffer.alloc(0), contentType: "image/png" }; },
+      async deletePoster(key) { deleted.push(key); },
+    };
+    const photos = new OrganizerPhotoService(prisma, storage);
+    const image = { buffer: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0]), mimetype: "image/png", originalname: "profile.png", size: 9 };
+    await expect(photos.upload(organizerId, { ...image, mimetype: "image/jpeg" })).rejects.toThrow();
+    const first = await photos.upload(organizerId, image);
+    const second = await photos.upload(organizerId, image);
+    expect(sequence).toBe(2);
+    expect(deleted).toContain(first.photoUrl.split("/").at(-1));
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: organizerId } })).photoUrl).toBe(second.photoUrl);
+  });
+});

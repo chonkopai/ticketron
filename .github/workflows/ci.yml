@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ticketron
+          POSTGRES_PASSWORD: ticketron
+          # Must match the disposable-DB guard (packages/database/src/test-database-guard.ts).
+          POSTGRES_DB: ticketron_test_1
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ticketron -d ticketron_test_1"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      CI: "true"
+      # Inert, non-secret config; no real Telegram/Resend/translation/map/payment credentials.
+      ENV_FILE: ${{ github.workspace }}/.github/ci/test.env
+      DATABASE_URL: postgresql://ticketron:ticketron@localhost:5432/ticketron_test_1
+      REGRESSION_TEST_DATABASE_URL: postgresql://ticketron:ticketron@localhost:5432/ticketron_test_1
+      VERIFICATION_TEST_DATABASE_URL: postgresql://ticketron:ticketron@localhost:5432/ticketron_test_1
+      # Every gated DB suite must run; a disabled gate fails the job instead of skipping.
+      REQUIRE_DB_TESTS: "true"
+      DATABASE_TESTS: "true"
+      STAFF_DATABASE_TEST: "true"
+      EVENT_CREATION_DB_TEST: "true"
+      GOOGLE_AUTH_DB_TEST: "true"
+      TELEGRAM_CHECKOUT_DB_TEST: "true"
+      TELEGRAM_COMPANION_DB_TEST: "true"
+      TELEGRAM_GUEST_DB_TEST: "true"
+      TELEGRAM_OIDC_DB_TEST: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install ffmpeg (draft media specs)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: pnpm install --frozen-lockfile
+      - name: Migrate the disposable test database
+        run: pnpm db:migrate
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm --filter @event-platform/database prisma:validate
+      - name: Tests (API, bot, database, shared packages and web node:test specs)
+        run: pnpm test
+      - name: Seed a second fresh database and verify it
+        env:
+          DATABASE_URL: postgresql://ticketron:ticketron@localhost:5432/ticketron_test_2
+          PGPASSWORD: ticketron
+        run: |
+          psql -h localhost -U ticketron -d postgres -c "CREATE DATABASE ticketron_test_2"
+          pnpm db:migrate
+          pnpm db:seed
+          pnpm db:verify

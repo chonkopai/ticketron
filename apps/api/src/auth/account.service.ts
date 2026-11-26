@@ -1,0 +1,212 @@
+import { verificationDecisionNotice, eventModerationNotice } from "@event-platform/shared-types";
+import { linkGuestPurchases } from "../orders/automatic-purchase-link.js";
+import { hasEventEnded, readCheckoutSnapshot } from "@event-platform/shared-types";
+import type { Prisma, PrismaClient } from "@event-platform/database";
+import type {
+  AccountDashboard,
+  AccountNotificationList,
+  AccountOrder,
+  AccountOrderList,
+  NotificationPreferences,
+  OrganizerProfile,
+} from "@event-platform/shared-types";
+import { Inject, Injectable, NotFoundException } from "@nestjs/common";
+
+import { DATABASE_CLIENT } from "./auth.constants.js";
+import type { AccountNotificationQueryDto, AccountOrderQueryDto, UpdateNotificationPreferencesDto, UpdateOrganizerProfileDto } from "./account.dto.js";
+import { guestEventTiming, guestEventTimingSelect } from "../tickets/guest-ticket-details.js";
+
+const DEFAULT_PREFERENCES: NotificationPreferences = {
+  transactionalTicketDelivery: true,
+  eventReminders: true,
+  marketingAnnouncements: false,
+};
+
+@Injectable()
+export class AccountService {
+  constructor(@Inject(DATABASE_CLIENT) private readonly database: PrismaClient) {}
+
+  async dashboard(userId: string, now = new Date()): Promise<AccountDashboard> {
+    await linkGuestPurchases(this.database, userId);
+    const [activeTickets, activeGroupPasses, usedTickets] = await this.database.$transaction([
+      this.database.ticket.findMany({
+        where: {
+          OR: [{ ownerUserId: userId }, { order: { buyerUserId: userId } }],
+          status: { in: ["paid", "active"] },
+          ticketType: { isInternal: false },
+        },
+        select: { ticketType: { select: { event: { select: guestEventTimingSelect } } } },
+      }),
+      this.database.groupPass.findMany({ where: { order: { buyerUserId: userId, paymentStatus: "paid" }, status: "active" }, select: { table: { select: { venueLayout: { select: { event: { select: guestEventTimingSelect } } } } } } }),
+      this.database.ticket.findMany({
+        where: { OR: [{ ownerUserId: userId }, { order: { buyerUserId: userId } }], status: "used" },
+        select: { ticketType: { select: { eventId: true } } },
+      }),
+    ]);
+    return {
+      activeAdmissions: activeTickets.filter(ticket => !hasEventEnded(guestEventTiming(ticket.ticketType.event), now)).length
+        + activeGroupPasses.filter(pass => pass.table.venueLayout.event && !hasEventEnded(guestEventTiming(pass.table.venueLayout.event), now)).length,
+      attendedEvents: new Set(usedTickets.map(({ ticketType }) => ticketType.eventId)).size,
+    };
+  }
+
+  async preferences(userId: string): Promise<NotificationPreferences> {
+    const row = await this.database.userNotificationPreference.findUnique({ where: { userId } });
+    return row ? presentPreferences(row) : DEFAULT_PREFERENCES;
+  }
+
+  async updatePreferences(userId: string, input: UpdateNotificationPreferencesDto): Promise<NotificationPreferences> {
+    return this.database.$transaction(async (transaction) => {
+      const row = await transaction.userNotificationPreference.upsert({
+        where: { userId },
+        create: { userId, ...DEFAULT_PREFERENCES, ...input },
+        update: input,
+      });
+      await cancelPendingForPreferences(transaction, userId, row);
+      await recordAccountMutation(transaction, userId, "notification_preferences.updated", Object.keys(input));
+      return presentPreferences(row);
+    });
+  }
+
+  async notifications(userId: string, query: AccountNotificationQueryDto, eventUpdatesOnly = false): Promise<AccountNotificationList> {
+    const page = query.page || 1;
+    const limit = query.limit || 20;
+    const scope: Prisma.NotificationWhereInput = { userId, channel: "in_app", status: "sent", ...(eventUpdatesOnly ? { OR: [{ type: { startsWith: "event." } }, { type: { in: ["purchase.confirmed", "refund.succeeded", "booking.cancelled", "ticket.cancelled"] } }] } : {}) };
+    const where: Prisma.NotificationWhereInput = { ...scope, ...(query.unreadOnly === "true" ? { readAt: null } : {}) };
+    const [rows, total, unreadCount] = await this.database.$transaction([
+      this.database.notification.findMany({ where, orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip: (page - 1) * limit, take: limit, select: { id: true, eventId: true, type: true, payload: true, createdAt: true, readAt: true, event: { select: { title: true } } } }),
+      this.database.notification.count({ where }),
+      this.database.notification.count({ where: { ...scope, readAt: null } }),
+    ]);
+    return {
+      items: rows.map((row) => {
+        const payload = row.payload && typeof row.payload === "object" && !Array.isArray(row.payload) ? row.payload as { text?: unknown; orderId?: unknown;caseId?:unknown; chatMode?: unknown; eventTitle?: unknown; legalName?: unknown; action?: unknown; reason?: unknown } : {};
+        return {chatMode: payload.chatMode === "organizer" || payload.chatMode === "guest" ? payload.chatMode : null, caseId:typeof payload.caseId==="string"&&/^[a-f0-9-]{36}$/i.test(payload.caseId)?payload.caseId:null, orderId: typeof payload.orderId === "string" && /^[0-9a-f-]{36}$/.test(payload.orderId) ? payload.orderId : null, id: row.id, eventId: row.eventId, eventTitle: row.event?.title ?? null, type: row.type, text: row.type === "organizer.verification" && typeof payload.action === "string" ? verificationDecisionNotice(typeof payload.legalName === "string" ? payload.legalName : "TICKET",payload.action,typeof payload.reason === "string" ? payload.reason : null,query.locale ?? "ru") : row.type === "event.moderation" && typeof payload.action === "string" ? eventModerationNotice(typeof payload.eventTitle === "string" ? payload.eventTitle : row.event?.title ?? "TICKET", payload.action, typeof payload.reason === "string" ? payload.reason : null, query.locale ?? "ru") : typeof payload.text === "string" ? payload.text : "Уведомление о событии", createdAt: row.createdAt.toISOString(), readAt: row.readAt?.toISOString() ?? null };
+      }),
+      page, limit, total, unreadCount, hasNext: page * limit < total,
+    };
+  }
+
+  async readNotification(userId: string, id: string): Promise<{ readAt: string }> {
+    const row = await this.database.notification.findFirst({ where: { id, userId, channel: "in_app", status: "sent" }, select: { id: true, readAt: true } });
+    if (!row) throw new NotFoundException({ code: "NOTIFICATION_NOT_FOUND" });
+    if (row.readAt) return { readAt: row.readAt.toISOString() };
+    const now = new Date();
+    await this.database.notification.updateMany({ where: { id, userId, channel: "in_app", status: "sent", readAt: null }, data: { readAt: now } });
+    const saved = await this.database.notification.findUniqueOrThrow({ where: { id }, select: { readAt: true } });
+    return { readAt: saved.readAt?.toISOString() ?? now.toISOString() };
+  }
+
+  async organizerProfile(userId: string, fallbackName: string | null): Promise<OrganizerProfile> {
+    const [row, user] = await Promise.all([
+      this.database.organizerProfile.findUnique({ where: { userId } }),
+      this.database.user.findUniqueOrThrow({ where: { id: userId }, select: { name: true, email: true, phone: true, photoUrl: true, organizerVerifiedAt:true, blockedAt:true } }),
+    ]);
+    return { verified:!!user.organizerVerifiedAt&&!user.blockedAt, organizationName: row?.organizationName ?? fallbackName ?? "Организатор", name: user.name, email: user.email, phone: user.phone, photoUrl: user.photoUrl, address: row?.address ?? null, showContactInfo: row?.showContactInfo ?? false };
+  }
+
+  async updateOrganizerProfile(userId: string, input: UpdateOrganizerProfileDto): Promise<OrganizerProfile> {
+    return this.database.$transaction(async (transaction) => {
+      const current = await transaction.user.findUniqueOrThrow({ where: { id: userId }, select: { name: true } });
+      const currentProfile = await transaction.organizerProfile.findUnique({ where: { userId } });
+      const organizationName = input.organizationName?.trim() ?? currentProfile?.organizationName ?? current.name ?? "Организатор";
+      const address = input.address === undefined ? currentProfile?.address ?? null : input.address?.trim() || null;
+      const showContactInfo = input.showContactInfo ?? currentProfile?.showContactInfo ?? false;
+      const row = await transaction.organizerProfile.upsert({
+        where: { userId },
+        create: { userId, organizationName, address, showContactInfo },
+        update: { organizationName, address, showContactInfo },
+      });
+      const user = await transaction.user.update({
+        where: { id: userId },
+        data: {
+          ...(input.name !== undefined ? { name: input.name.trim() } : {}),
+          ...(input.email !== undefined ? { email: input.email?.trim() || null } : {}),
+          ...(input.phone !== undefined ? { phone: input.phone?.trim() || null } : {}),
+        },
+        select: { name: true, email: true, phone: true, photoUrl: true, organizerVerifiedAt:true, blockedAt:true },
+      });
+      await recordAccountMutation(transaction, userId, "organizer_profile.updated", Object.keys(input));
+      return { organizationName: row.organizationName, name: user.name, email: user.email, phone: user.phone, photoUrl: user.photoUrl, address: row.address, showContactInfo: row.showContactInfo };
+    });
+  }
+
+  async orders(userId: string, query: AccountOrderQueryDto): Promise<AccountOrderList> {
+    await linkGuestPurchases(this.database, userId);
+    const where: Prisma.OrderWhereInput = { buyerUserId: userId, ...(query.status ? { paymentStatus: query.status } : {}) };
+    const skip = (query.page - 1) * query.limit;
+    const [rows, total] = await this.database.$transaction([
+      this.database.order.findMany({ where, include: { _count: { select: { payments: { where: { status: { in: ["paid", "refunded"] } } } } } }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip, take: query.limit }),
+      this.database.order.count({ where }),
+    ]);
+    return {
+      items: rows.map(presentOrder),
+      page: query.page,
+      limit: query.limit,
+      total,
+      hasNext: skip + rows.length < total,
+    };
+  }
+}
+
+const PENDING_DELIVERY = { OR: [{ status: "pending" as const }, { status: "failed" as const, nextAttemptAt: { not: null } }] };
+
+/**
+ * Cancels a user's queued Telegram notifications immediately, using the same terminal status and
+ * error code the dispatcher applies at send time (which stays as the safety net). Scheduling of
+ * newly enabled channels is left to the existing reminder job.
+ */
+export async function cancelPendingTelegramNotifications(transaction: Prisma.TransactionClient, userId: string, scope: Prisma.NotificationWhereInput, lastError = "RECIPIENT_PREFERENCE_OR_LINK_CHANGED"): Promise<number> {
+  const where: Prisma.NotificationWhereInput = { userId, channel: "telegram", AND: [PENDING_DELIVERY, scope] };
+  const rows = await transaction.notification.findMany({ where, select: { id: true, broadcastId: true } });
+  if (!rows.length) return 0;
+  const ids = rows.map((row) => row.id);
+  const cancelled = await transaction.notification.updateMany({ where: { id: { in: ids }, ...PENDING_DELIVERY }, data: { status: "failed", lastError, nextAttemptAt: null } });
+  for (const broadcastId of new Set(rows.flatMap((row) => row.broadcastId ? [row.broadcastId] : []))) {
+    const open = await transaction.notification.count({ where: { broadcastId, channel: "telegram", OR: [{ status: { in: ["pending", "processing"] } }, { status: "failed", nextAttemptAt: { not: null } }] } });
+    if (!open) await transaction.broadcast.updateMany({ where: { id: broadcastId, status: "sending" }, data: { status: "failed" } });
+  }
+  return cancelled.count;
+}
+
+async function cancelPendingForPreferences(transaction: Prisma.TransactionClient, userId: string, row: NotificationPreferences): Promise<void> {
+  const types: string[] = [];
+  if (!row.eventReminders) types.push("event.reminder");
+  if (!row.transactionalTicketDelivery) types.push("purchase.confirmed", "ticket.resend");
+  if (types.length) await cancelPendingTelegramNotifications(transaction, userId, { type: { in: types } });
+  if (!row.marketingAnnouncements) await cancelPendingTelegramNotifications(transaction, userId, { type: "marketing.campaign" }, "MARKETING_CONSENT_WITHDRAWN");
+}
+
+function presentPreferences(row: NotificationPreferences): NotificationPreferences {
+  return {
+    transactionalTicketDelivery: row.transactionalTicketDelivery,
+    eventReminders: row.eventReminders,
+    marketingAnnouncements: row.marketingAnnouncements,
+  };
+}
+
+function presentOrder(order: { _count: { payments: number }; id: string; type: "ticket" | "table" | "deposit"; paymentStatus: AccountOrder["status"]; amount: number; currency: string; createdAt: Date; checkoutSnapshot: Prisma.JsonValue }): AccountOrder {
+  const snapshot = readCheckoutSnapshot(order.checkoutSnapshot);
+  const quantity = typeof snapshot.quantity === "number" ? snapshot.quantity : null;
+  const name = typeof snapshot.itemName === "string" ? snapshot.itemName : order.type === "table" ? "Стол" : "Билет";
+  return {
+    id: order.id,
+    type: order.type,
+    status: order.paymentStatus,
+    paymentUnsuccessful: order.paymentStatus === "failed" || (order.amount > 0 && order.paymentStatus === "cancelled" && order._count.payments === 0),
+    amount: order.amount,
+    currency: order.currency.trim(),
+    createdAt: order.createdAt.toISOString(),
+    eventId: typeof snapshot.eventId === "string" ? snapshot.eventId : null,
+    eventTitle: typeof snapshot.eventTitle === "string" ? snapshot.eventTitle : "Событие",
+    itemSummary: quantity && quantity > 1 ? `${name} × ${quantity}` : name,
+    receiptUrl: null,
+  };
+}
+
+async function recordAccountMutation(transaction: Prisma.TransactionClient, userId: string, action: string, changedFields: string[]): Promise<void> {
+  const user = await transaction.user.findUnique({ where: { id: userId }, select: { id: true } });
+  if (!user) throw new NotFoundException({ code: "USER_NOT_FOUND", message: "User was not found" });
+  await transaction.auditLog.create({ data: { actorId: userId, action, entityType: "user", entityId: userId, meta: { changedFields } } });
+  await transaction.outboxEvent.create({ data: { eventType: action, aggregateType: "user", aggregateId: userId, payload: { changedFields } } });
+}

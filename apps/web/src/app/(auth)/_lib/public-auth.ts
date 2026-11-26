@@ -1,0 +1,127 @@
+import { validatedReturnPath, type EventLocale } from "@event-platform/shared-types";
+import { localeFromBrowser, localeUrl } from "../../../lib/locale";
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
+
+const ruMessages = {
+  TELEGRAM_UNAVAILABLE: "Вход с подтверждением в Telegram сейчас недоступен. Войдите через окно Telegram с номером телефона.",
+  TELEGRAM_INVALID: "Подтверждение Telegram недействительно или истекло. Начните вход заново.",
+  TELEGRAM_CANCELED: "Вход через Telegram отменён.",
+  TELEGRAM_BROWSER_REQUIRED: "Вернитесь в браузер, где начали вход, или войдите заново.",
+  RATE_LIMITED: "Слишком много попыток. Повторите позже.",
+  GOOGLE_UNAVAILABLE: "Google сейчас недоступен. Выберите другой способ входа.",
+  GOOGLE_INVALID: "Не удалось подтвердить вход через Google. Попробуйте снова.",
+  GOOGLE_LINK_REQUIRED: "Войдите существующим способом, затем подключите Google в настройках аккаунта.",
+  GOOGLE_RETRY_OR_LINK: "Попробуйте снова. Этот Google-аккаунт или способ входа уже использован.",
+  EMAIL_NOT_REGISTERED: "Этот email не зарегистрирован. Сначала создайте аккаунт.",
+  PHONE_NOT_REGISTERED: "Этот номер телефона не зарегистрирован. Сначала создайте аккаунт.",
+  INVALID_CREDENTIALS: "Неверные данные для входа.",
+  INVALID_VERIFICATION_CODE: "Код неверен, истёк или уже использован.",
+  INVALID_VERIFICATION_GRANT: "Подтверждение истекло. Запросите новый код.",
+  VERIFICATION_RATE_LIMITED: "Слишком много попыток. Повторите позже.",
+  LOGIN_RATE_LIMITED: "Слишком много попыток входа. Повторите позже.",
+  VERIFICATION_PROVIDER_UNAVAILABLE: "Этот способ подтверждения пока недоступен.",
+  VERIFICATION_SEND_FAILED: "Не удалось отправить код. Попробуйте позже.",
+  IDENTITY_ALREADY_LINKED: "Этот способ входа уже привязан к другому аккаунту.",
+  PASSWORD_LENGTH: "Пароль должен содержать не менее 12 символов.",
+  PASSWORD_SETUP_REQUIRED: "Для первого способа входа задайте пароль.",
+  RECENT_AUTH_REQUIRED: "Для этого действия войдите в аккаунт заново.",
+  IDENTITY_ALREADY_EXISTS: "Этот контакт уже используется другим аккаунтом.",
+  CONTACT_ALREADY_LINKED: "Этот способ входа уже подключён.",
+  VERIFICATION_EXPIRED: "Код истёк. Запросите новый.",
+  VERIFICATION_ATTEMPTS_EXCEEDED: "Попытки исчерпаны. Запросите новый код.",
+} as const;
+
+type AuthErrorCode = keyof typeof ruMessages;
+const messages: Record<EventLocale, Record<AuthErrorCode, string>> = {
+  ru: ruMessages,
+  kk: {
+  TELEGRAM_UNAVAILABLE: "Telegram-да растау арқылы кіру қазір қолжетімсіз. Telegram терезесінде телефон нөмірімен кіріңіз.",
+  TELEGRAM_INVALID: "Telegram растауы жарамсыз немесе мерзімі өткен. Кіруді қайта бастаңыз.",
+  TELEGRAM_CANCELED: "Telegram арқылы кіру тоқтатылды.",
+  TELEGRAM_BROWSER_REQUIRED: "Кіруді бастаған браузерге оралыңыз немесе қайта кіріңіз.",
+  RATE_LIMITED: "Әрекет саны тым көп. Кейінірек қайталаңыз.",
+  GOOGLE_UNAVAILABLE: "Google қазір қолжетімсіз. Басқа кіру тәсілін таңдаңыз.",
+  GOOGLE_INVALID: "Google арқылы кіру расталмады. Қайталап көріңіз.",
+  GOOGLE_LINK_REQUIRED: "Бұрынғы тәсілмен кіріп, аккаунт баптауларында Google қосыңыз.",
+  GOOGLE_RETRY_OR_LINK: "Қайталап көріңіз. Бұл Google аккаунты немесе кіру тәсілі бұрын қолданылған.",
+  EMAIL_NOT_REGISTERED: "Бұл email тіркелмеген. Алдымен аккаунт ашыңыз.",
+  PHONE_NOT_REGISTERED: "Бұл телефон нөмірі тіркелмеген. Алдымен аккаунт ашыңыз.",
+    INVALID_CREDENTIALS: "Кіру деректері қате.",
+    INVALID_VERIFICATION_CODE: "Код қате, мерзімі өткен немесе бұрын қолданылған.",
+    INVALID_VERIFICATION_GRANT: "Растау мерзімі өтті. Жаңа код сұраңыз.",
+    VERIFICATION_RATE_LIMITED: "Әрекет саны тым көп. Кейінірек қайталаңыз.",
+    LOGIN_RATE_LIMITED: "Кіру әрекеті тым көп. Кейінірек қайталаңыз.",
+    VERIFICATION_PROVIDER_UNAVAILABLE: "Бұл растау тәсілі әзірге қолжетімсіз.",
+    VERIFICATION_SEND_FAILED: "Кодты жіберу мүмкін болмады. Кейінірек қайталаңыз.",
+    IDENTITY_ALREADY_LINKED: "Бұл кіру тәсілі басқа аккаунтқа тіркелген.",
+    PASSWORD_LENGTH: "Құпиясөз кемінде 12 таңбадан тұруы керек.",
+    PASSWORD_SETUP_REQUIRED: "Алғашқы кіру тәсілі үшін құпиясөз орнатыңыз.",
+    RECENT_AUTH_REQUIRED: "Бұл әрекет үшін аккаунтқа қайта кіріңіз.",
+    IDENTITY_ALREADY_EXISTS: "Бұл байланыс дерегі басқа аккаунтта қолданылып жатыр.",
+    CONTACT_ALREADY_LINKED: "Бұл кіру тәсілі қосылған.",
+    VERIFICATION_EXPIRED: "Кодтың мерзімі өтті. Жаңа код сұраңыз.",
+    VERIFICATION_ATTEMPTS_EXCEEDED: "Әрекет саны таусылды. Жаңа код сұраңыз.",
+  },
+  en: {
+  TELEGRAM_UNAVAILABLE: "Telegram approval sign-in is currently unavailable. Use Telegram's phone-number login instead.",
+  TELEGRAM_INVALID: "Telegram approval is invalid or expired. Start sign-in again.",
+  TELEGRAM_CANCELED: "Telegram sign-in was canceled.",
+  TELEGRAM_BROWSER_REQUIRED: "Return to the browser where you started sign-in, or start again.",
+  RATE_LIMITED: "Too many attempts. Try again later.",
+  GOOGLE_UNAVAILABLE: "Google is currently unavailable. Choose another sign-in method.",
+  GOOGLE_INVALID: "Could not verify Google sign-in. Please try again.",
+  GOOGLE_LINK_REQUIRED: "Sign in using your existing method, then connect Google in account settings.",
+  GOOGLE_RETRY_OR_LINK: "Please try again. This Google account or sign-in attempt has already been used.",
+  EMAIL_NOT_REGISTERED: "This email is not registered. Sign up first.",
+  PHONE_NOT_REGISTERED: "This phone number is not registered. Sign up first.",
+    INVALID_CREDENTIALS: "Incorrect sign-in details.",
+    INVALID_VERIFICATION_CODE: "The code is invalid, expired, or already used.",
+    INVALID_VERIFICATION_GRANT: "Verification expired. Request a new code.",
+    VERIFICATION_RATE_LIMITED: "Too many attempts. Try again later.",
+    LOGIN_RATE_LIMITED: "Too many sign-in attempts. Try again later.",
+    VERIFICATION_PROVIDER_UNAVAILABLE: "This verification method is not available yet.",
+    VERIFICATION_SEND_FAILED: "Could not send the code. Try again later.",
+    IDENTITY_ALREADY_LINKED: "This sign-in method belongs to another account.",
+    PASSWORD_LENGTH: "Your password must have at least 12 characters.",
+    PASSWORD_SETUP_REQUIRED: "Set a password for your first sign-in method.",
+    RECENT_AUTH_REQUIRED: "Sign in again to continue.",
+    IDENTITY_ALREADY_EXISTS: "This contact is already used by another account.",
+    CONTACT_ALREADY_LINKED: "This sign-in method is already connected.",
+    VERIFICATION_EXPIRED: "The code expired. Request a new one.",
+    VERIFICATION_ATTEMPTS_EXCEEDED: "No attempts remain. Request a new code.",
+  },
+};
+
+const requestFailed: Record<EventLocale, string> = {
+  ru: "Не удалось выполнить запрос. Попробуйте ещё раз.",
+  kk: "Сұрауды орындау мүмкін болмады. Қайталап көріңіз.",
+  en: "The request could not be completed. Please try again.",
+};
+
+export function authErrorMessage(code: string | undefined): string | null {
+  return code && code in ruMessages ? messages[localeFromBrowser()][code as AuthErrorCode] : null;
+}
+
+export async function publicAuthRequest<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+  const response = await fetch(new URL(path, API_URL), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+    cache: "no-store",
+    ...(signal ? { signal } : {}),
+  });
+  if (!response.ok) {
+    let code: string | undefined;
+    try { code = (await response.json() as { code?: string }).code; } catch { /* no body */ }
+    throw new Error(authErrorMessage(code) ?? requestFailed[localeFromBrowser()]);
+  }
+  return await response.json() as T;
+}
+
+export function safeReturnPath(): string {
+  const home = localeUrl("/", localeFromBrowser());
+  if (typeof window === "undefined") return home;
+  const candidate = new URLSearchParams(window.location.search).get("returnTo");
+  return validatedReturnPath(candidate, window.location.origin, home);
+}

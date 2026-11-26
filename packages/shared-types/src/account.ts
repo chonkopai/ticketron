@@ -1,0 +1,127 @@
+import type { OrganizerEvent, PublicEventMedia } from "./events.js";
+
+export interface AccountDashboard {
+  activeAdmissions: number;
+  attendedEvents: number;
+}
+
+export interface NotificationPreferences {
+  transactionalTicketDelivery: boolean;
+  eventReminders: boolean;
+  marketingAnnouncements: boolean;
+}
+
+export interface AccountNotification {
+  chatMode?: "guest" | "organizer" | null;
+  caseId?:string|null;
+  orderId?: string | null;
+  id: string;
+  eventId: string | null;
+  eventTitle: string | null;
+  type: string;
+  text: string;
+  createdAt: string;
+  readAt: string | null;
+}
+
+export interface AccountNotificationList {
+  items: AccountNotification[];
+  page: number;
+  limit: number;
+  total: number;
+  unreadCount: number;
+  hasNext: boolean;
+}
+
+export interface OrganizerProfile {
+  verified?: boolean;
+  organizationName: string;
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  photoUrl: string | null;
+  address: string | null;
+  showContactInfo: boolean;
+}
+
+export type AccountOrderStatus = "pending" | "paid" | "failed" | "cancelled" | "refunded";
+
+export interface AccountOrder {
+  id: string;
+  type: "ticket" | "table" | "deposit";
+  status: AccountOrderStatus;
+  paymentUnsuccessful?: boolean;
+  amount: number;
+  currency: string;
+  createdAt: string;
+  eventId: string | null;
+  eventTitle: string;
+  itemSummary: string;
+  receiptUrl: null;
+}
+
+export interface AccountOrderList {
+  items: AccountOrder[];
+  page: number;
+  limit: number;
+  total: number;
+  hasNext: boolean;
+}
+
+export type OrganizerEventStatusGroup = "all" | "on_sale" | "pending" | "paused" | "rejected" | "hidden" | "draft" | "archive";
+export type OrganizerEventSort = "updated_desc" | "date_asc" | "date_desc";
+export type OrganizerAdmissionMode = "ordinary" | "per_seat" | "whole_table";
+
+export interface OrganizerEventMetrics {
+  mode: OrganizerAdmissionMode;
+  sold: number;
+  capacity: number;
+  remaining: number;
+  settledRevenue: number;
+  currency: string | null;
+  includedSeats: number | null;
+}
+
+export interface OrganizerWorkspaceEvent extends OrganizerEvent {
+  cardMedia?: PublicEventMedia;
+  displayId: string;
+  metrics: OrganizerEventMetrics;
+}
+
+export interface OrganizerWorkspaceEventList {
+  items: OrganizerWorkspaceEvent[];
+  page: number;
+  limit: number;
+  total: number;
+  hasNext: boolean;
+}
+
+export interface OrganizerDashboard {
+  totalEvents: number;
+  publishedEvents: number;
+  draftEvents: number;
+  completedEvents: number;
+  cancelledEvents: number;
+  settledRevenue: number;
+  currency: string | null;
+  soldAdmissions: number;
+  totalAdmissions: number;
+}
+
+export const ORGANIZER_STATUS_GROUPS: OrganizerEventStatusGroup[] = [
+  "all",
+  "on_sale",
+  "pending",
+  "paused",
+  "rejected",
+  "hidden",
+  "draft",
+  "archive",
+];
+
+export const ORGANIZER_EVENT_SORTS: OrganizerEventSort[] = [
+  "updated_desc",
+  "date_asc",
+  "date_desc",
+];
+

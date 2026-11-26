@@ -1,0 +1,71 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { countryForCity, clearCatalogLocation, detectCatalogLocation, dismissCatalogLocationSuggestion, lookupCatalogLocation, rememberCatalogLocation, savedCatalogLocation, shouldSuggestCatalogLocation } from "./catalog-location";
+
+test("city detection accepts complete city data and falls back on errors or incomplete results", async () => {
+  const request = (value: unknown, status = 200) => (async () => Response.json(value, { status })) as typeof fetch;
+  assert.deepEqual(await lookupCatalogLocation(request({ success: true, country_code: "KZ", city: " Almaty " })), { countryCode: "KZ", city: "Almaty" });
+  for (const value of [{ success: false }, { success: true, country_code: "XX", city: "Unknown" }, { success: true, country_code: "KZ", city: "" }]) assert.equal(await lookupCatalogLocation(request(value)), null);
+  assert.equal(await lookupCatalogLocation(request({}, 429)), null);
+  assert.equal(await lookupCatalogLocation((async () => { throw new Error("offline"); }) as typeof fetch), null);
+});
+
+test("manual location and All countries persist; automatic locations expire", () => {
+  const values = new Map<string, string>();
+  const previous = globalThis.window;
+  Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage: { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value) } } });
+  try {
+    rememberCatalogLocation({ countryCode: "KZ", city: "Almaty" });
+    assert.deepEqual(savedCatalogLocation(), { countryCode: "KZ", city: "Almaty" });
+    clearCatalogLocation();
+    assert.deepEqual(savedCatalogLocation(), { countryCode: "", city: "" });
+    rememberCatalogLocation({ countryCode: "AE", city: "Dubai" }, true);
+    const value = JSON.parse(values.get("ticket:catalog-location")!);
+    assert.ok(value.expiresAt > Date.now());
+    values.set("ticket:catalog-location", JSON.stringify({ ...value, expiresAt: Date.now() - 1 }));
+    assert.equal(savedCatalogLocation(), null);
+  } finally {
+    if (previous) Object.defineProperty(globalThis, "window", { configurable: true, value: previous });
+    else Reflect.deleteProperty(globalThis, "window");
+  }
+});
+
+test("saved city country resolves aliases without assuming Kazakhstan", () => {
+  assert.equal(countryForCity("Москва"), "RU"); assert.equal(countryForCity("Moscow"), "RU"); assert.equal(countryForCity("Astana"), "KZ"); assert.equal(countryForCity("Dubai"), "AE"); assert.equal(countryForCity("Unknown city"), null);
+});
+
+test("a saved choice, profile preference or dismissed prompt prevents repeated city suggestions", () => {
+  const values = new Map<string, string>();
+  const previous = globalThis.window;
+  Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage: { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value) } } });
+  try {
+    assert.equal(shouldSuggestCatalogLocation(), true);
+    assert.equal(shouldSuggestCatalogLocation({ countryCode: "KZ", city: "Almaty" }), false);
+    rememberCatalogLocation({ countryCode: "KZ", city: "Almaty" });
+    assert.equal(shouldSuggestCatalogLocation(), false);
+    clearCatalogLocation();
+    assert.equal(shouldSuggestCatalogLocation(), false, "All countries is an explicit choice too");
+    values.clear();
+    values.set("ticket:city-prompt-dismissed", "dismissed");
+    assert.equal(shouldSuggestCatalogLocation(), false, "dismissal survives a fresh page session");
+    values.clear();
+    dismissCatalogLocationSuggestion();
+    assert.equal(values.get("ticket:city-prompt-dismissed"), "dismissed");
+    assert.equal(shouldSuggestCatalogLocation(), false);
+  } finally {
+    if (previous) Object.defineProperty(globalThis, "window", { configurable: true, value: previous });
+    else Reflect.deleteProperty(globalThis, "window");
+  }
+});
+
+test("IP geolocation stays off unless NEXT_PUBLIC_IP_GEOLOCATION_ENABLED is true", async t => {
+  const previous = process.env.NEXT_PUBLIC_IP_GEOLOCATION_ENABLED, previousFetch = globalThis.fetch;
+  let called = false;
+  globalThis.fetch = (async () => { called = true; throw new Error("must not be called"); }) as typeof fetch;
+  t.after(() => { globalThis.fetch = previousFetch; if (previous === undefined) delete process.env.NEXT_PUBLIC_IP_GEOLOCATION_ENABLED; else process.env.NEXT_PUBLIC_IP_GEOLOCATION_ENABLED = previous; });
+  delete process.env.NEXT_PUBLIC_IP_GEOLOCATION_ENABLED;
+  assert.equal(await detectCatalogLocation(), null);
+  process.env.NEXT_PUBLIC_IP_GEOLOCATION_ENABLED = "false";
+  assert.equal(await detectCatalogLocation(), null);
+  assert.equal(called, false);
+});

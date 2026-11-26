@@ -1,0 +1,49 @@
+/* Event page — layout and look come from styles/tk-event.css (copied from output/event-redesign).
+   These rules only fit the real components (framed media, live hall plan, map iframe) into the prototype shapes. */
+.tke-page { position: relative; color: var(--tk-text); }
+.tke-stage-media { position: absolute; inset: 0; animation: tke-fade .45s ease; }
+.tke-stage-media .tke-main { width: 100%; height: 100%; object-fit: cover; }
+@keyframes tke-fade { from { opacity: 0; } }
+.tke-stage-actions .ticket-fav { position: static; width: 40px; height: 40px; }
+.tke-glass { display: inline-grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; background: rgb(18 14 26 / .34); color: #fff; border: 1px solid rgb(255 255 255 / .28); -webkit-backdrop-filter: blur(12px) saturate(1.4); backdrop-filter: blur(12px) saturate(1.4); transition: background-color .2s, transform .15s; }
+.tke-glass:hover { background: rgb(18 14 26 / .52); }
+.tke-glass svg { width: 18px; height: 18px; }
+.tke-thumb-row button { position: relative; }
+.tke-thumb-row button > :first-child { position: absolute; inset: 0; }
+.tke-facts-card h1 { overflow-wrap: anywhere; }
+.tke-btn svg { width: 18px; height: 18px; }
+.tke-anchor { display: block; position: relative; top: -132px; }
+.tke-sync { margin: 0 0 16px; padding: 12px 16px; border-radius: 16px; background: var(--ticket-warning-soft); color: var(--ticket-warning); font-size: 14px; }
+.tke-sync button { font-weight: 700; text-decoration: underline; }
+.tke-error { margin: 10px 2px 0; font-size: 13px; color: var(--ticket-danger); }
+/* Live hall plan — same look and motion as the prototype map (output/event-redesign) */
+.tke-map-scroll .guest-hall { position: relative; min-width: 0; border: 0; border-radius: 0; background: transparent; }
+.tke-map-scroll .guest-hall-scroll { max-height: 75vh; overflow: auto; padding: 58px 16px 16px; scrollbar-width: thin; }
+.tke-map-scroll .guest-hall-svg { display: block; margin: 0 auto; height: auto; transition: width .25s ease, min-width .25s ease; }
+.tke-map-scroll .guest-hall-zoom { position: absolute; top: 12px; left: 12px; z-index: 2; display: flex; align-items: center; gap: 2px; padding: 3px; border-radius: 999px; background: color-mix(in srgb, var(--tk-surface) 90%, transparent); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); border: 1px solid var(--tk-border); }
+.tke-map-scroll .guest-hall-zoom button { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; font-size: 17px; color: var(--tk-muted); transition: background-color .2s, color .2s; }
+.tke-map-scroll .guest-hall-zoom button:hover:not(:disabled) { background: var(--tk-raised); color: var(--tk-text); }
+.tke-map-scroll .guest-hall-zoom button:disabled { opacity: .35; }
+.tke-map-scroll .guest-hall-zoom .guest-hall-zoom-value { width: auto; min-width: 46px; border-radius: 999px; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--tk-text); }
+.tke-map-shell.tke-full .tke-map-scroll { display: block; overflow: auto; }
+.tke-map-shell.tke-full .tke-map-scroll .guest-hall { height: 100%; }
+.tke-tray .tke-btn[aria-disabled="true"] { opacity: .45; pointer-events: none; }
+.tke-tray-chip .tke-x { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; color: var(--tk-dim); }
+.tke-tray-chip .tke-x:hover { background: var(--tk-hover); color: var(--tk-text); }
+.tke-tray-chip .tke-x svg { width: 13px; height: 13px; }
+.tke-tariff { cursor: default; }
+.tke-mapcard { min-height: 260px; }
+.tke-map-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.tke-open-maps { z-index: 1; }
+.tke-gallery button > :first-child:not(.tke-plus) { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.tke-lightbox video, .tke-lightbox img { max-width: min(1100px, 100%); max-height: 82vh; border-radius: 20px; }
+.tke-similar-head a { font-size: 14px; font-weight: 600; color: var(--tk-accent); }
+.event-checkout { min-width: 0; }
+
+/* Ticket panel — the live checkout, dressed as the prototype's .checkout card */
+.event-booking { border: 0; border-radius: 28px; box-shadow: var(--tk-card-shadow); scroll-margin-top: 132px; }
+:root[data-theme="dark"] .event-booking { border: 1px solid var(--tk-border); }
+
+/* Hall selection items still used by the checkout panel */
+.venue-selection-item { padding: 10px 12px; border-radius: 14px; background: var(--tk-surface); font-size: 13px; line-height: 1.45; }
+.venue-selection-remove { display: grid; flex: none; place-items: center; width: 28px; height: 28px; border-radius: 50%; color: var(--tk-dim); font-size: 18px; line-height: 1; }

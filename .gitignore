@@ -1,0 +1,43 @@
+# Dependencies and build output
+node_modules/
+.pnpm-store/
+.next/
+.next-v2-*/
+.next-admin-*/
+dist/
+coverage/
+.turbo/
+
+# Environment and local runtime files
+.env
+.env.*
+!.env.example
+*.log
+*.tsbuildinfo
+var/
+
+# Credentials and signing material
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.crt
+*.pkpass
+
+# Generated database client
+packages/database/src/generated/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
+
+# Local notes, tool state and scratch output (never committed)
+*.local.md
+/output/
+/docs/local/
+
+# Browser test output
+playwright-report/
+test-results/

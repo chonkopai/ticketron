@@ -1,0 +1,5 @@
+.event-review-status { display:inline-flex; align-items:center; border-radius:999px; padding:5px 10px; background:var(--ticket-accent-soft,#eee6ff); color:var(--ticket-accent,#6222d7); font-size:12px; font-weight:600; line-height:1.5; }
+.event-review-status.is-open { background:var(--ticket-success-soft,#e7f7ee); color:var(--ticket-success,#146b3a); }
+.event-review-status.is-rejected,.event-review-status.is-cancelled { background:var(--ticket-danger-soft,#fff0f2); color:var(--ticket-danger,#ad2446); }
+.event-review-status.is-pending,.event-review-status.is-paused { background:var(--ticket-warning-soft,#fff4d9); color:var(--ticket-warning,#805500); }
+.event-review-status.is-hidden,.event-review-status.is-draft,.event-review-status.is-completed,.event-review-status.is-archived { background:var(--ticket-raised,#f2f1f7); color:var(--ticket-muted,#646176); }

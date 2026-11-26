@@ -1,0 +1,376 @@
+/* Copied from output/account-redesign/src/account.css. Classes prefixed tka-. */
+  /* ================= Account page ================= */
+  .tka-acc-layout { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 28px; align-items: start; margin-top: 28px; }
+  .tka-panel { background: var(--tk-surface); border-radius: 28px; box-shadow: var(--tk-card-shadow); }
+  :root[data-theme="dark"] .tka-panel { border: 1px solid var(--tk-border); }
+
+  /* Sidebar */
+  .tka-side { position: sticky; top: 88px; display: grid; gap: 14px; }
+  .tka-me { display: flex; align-items: center; gap: 12px; padding: 18px; }
+  .tka-me-ava { display: grid; place-items: center; width: 52px; height: 52px; border-radius: 18px; font-size: 20px; font-weight: 700; color: #fff; background: linear-gradient(135deg, #7c3aed, #ec4899); flex-shrink: 0; }
+  .tka-me b { display: block; font-size: 16px; font-weight: 650; letter-spacing: -0.015em; }
+  .tka-me small { display: block; margin-top: 2px; font-size: 13px; color: var(--tk-muted); }
+  .tka-nav { display: grid; gap: 2px; padding: 8px; }
+  .tka-nav a { display: flex; align-items: center; gap: 12px; height: 44px; padding: 0 12px; border-radius: 14px; font-size: 14.5px; font-weight: 500; color: var(--tk-muted); transition: background-color .2s, color .2s; }
+  .tka-nav a:hover { background: var(--tk-raised); color: var(--tk-text); }
+  .tka-nav a.tka-on { background: var(--tk-accent-soft); color: var(--tk-accent); font-weight: 600; }
+  .tka-nav svg { width: 19px; height: 19px; }
+  .tka-nav .tka-count { margin-left: auto; min-width: 22px; height: 22px; padding: 0 7px; display: grid; place-items: center; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--tk-raised); color: var(--tk-muted); }
+  .tka-nav a.tka-on .tka-count { background: var(--tk-surface); color: var(--tk-accent); }
+  .tka-nav hr { border: 0; height: 1px; background: var(--tk-border); margin: 6px 12px; }
+  .tka-nav .tka-out { color: var(--tk-dim); }
+  .tka-nav .tka-out:hover { color: #e11d48; background: color-mix(in srgb, #e11d48 8%, transparent); }
+
+  /* Pro teaser */
+  .tka-pro-teaser { position: relative; overflow: hidden; padding: 20px; border-radius: 24px; color: #fff; background: #0d0b14; isolation: isolate; }
+  .tka-pro-teaser::before { content: ""; position: absolute; inset: -40%; z-index: -1; background: conic-gradient(from 0deg, transparent, rgb(124 58 237 / .55), transparent 30%, rgb(234 179 8 / .35), transparent 60%); animation: tka-spin 14s linear infinite; }
+  .tka-pro-teaser::after { content: ""; position: absolute; inset: 1px; z-index: -1; border-radius: 23px; background: linear-gradient(160deg, #15121e, #0b0a10); }
+  @keyframes tka-spin { to { transform: rotate(1turn); } }
+  .tka-pro-badge { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px; border-radius: 999px; font-size: 11px; font-weight: 800; letter-spacing: .12em; color: #fde68a; background: rgb(234 179 8 / .12); border: 1px solid rgb(234 179 8 / .3); }
+  .tka-pro-teaser b { display: block; margin: 12px 0 4px; font-size: 16px; font-weight: 650; }
+  .tka-pro-teaser p { margin: 0 0 14px; font-size: 13px; line-height: 1.45; color: #b9b2c8; }
+  .tka-pro-teaser a { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px; border-radius: 999px; background: #fff; color: #0d0b14; font-size: 13.5px; font-weight: 600; }
+  .tka-pro-teaser a svg { width: 15px; height: 15px; }
+
+  /* Main */
+  .tka-view { display: none; animation: tka-view-in .3s ease both; }
+  .tka-view.tka-on { display: block; }
+  @keyframes tka-view-in { from { opacity: 0; transform: translateY(6px); } }
+  .tka-view-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 18px; }
+  .tka-view-head h1 { margin: 0; font-size: 30px; font-weight: 750; letter-spacing: -0.035em; }
+  .tka-seg { position: relative; display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr; padding: 3px; border-radius: 999px; background: var(--tk-raised); }
+  .tka-seg-thumb { position: absolute; top: 3px; bottom: 3px; left: 3px; border-radius: 999px; background: var(--tk-surface); box-shadow: 0 1px 2px rgb(21 28 39 / .06), 0 2px 8px rgb(21 28 39 / .06); transition: transform .32s cubic-bezier(.3,.7,.2,1), width .32s; }
+  :root[data-theme="dark"] .tka-seg-thumb { background: var(--tk-hover); box-shadow: none; }
+  .tka-seg button { position: relative; z-index: 1; height: 36px; padding: 0 16px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; font-size: 14px; font-weight: 500; color: var(--tk-muted); white-space: nowrap; }
+  .tka-seg button[aria-pressed="true"] { color: var(--tk-text); font-weight: 600; }
+  .tka-seg .tka-n { font-size: 12px; color: var(--tk-dim); font-weight: 600; }
+
+  /* Ticket cards — shaped like real tickets */
+  .tka-tickets { display: grid; gap: 16px; }
+  .tka-ticket { position: relative; display: grid; grid-template-columns: 220px minmax(0, 1fr) 190px; min-height: 176px; background: var(--tk-surface); border-radius: 24px; box-shadow: var(--tk-card-shadow); animation: tka-view-in .35s ease both; }
+  :root[data-theme="dark"] .tka-ticket { border: 1px solid var(--tk-border); }
+  .tka-ticket-photo { position: relative; border-radius: 24px 0 0 24px; overflow: hidden; }
+  .tka-ticket-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .tka-ticket-photo .tka-date-badge { top: 12px; left: 12px; }
+  .tka-ticket-body { display: flex; flex-direction: column; gap: 8px; padding: 20px 22px; min-width: 0; }
+  .tka-ticket-body h3 { margin: 0; font-size: 18px; font-weight: 650; letter-spacing: -0.02em; }
+  .tka-tmeta { display: grid; gap: 4px; font-size: 13.5px; color: var(--tk-muted); }
+  .tka-tmeta span { display: flex; align-items: center; gap: 8px; }
+  .tka-tmeta svg { width: 15px; height: 15px; color: var(--tk-dim); }
+  .tka-seats { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; }
+  .tka-seat-pill { height: 26px; padding: 0 10px; display: inline-flex; align-items: center; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--tk-raised); }
+  .tka-soon { color: #c2410c; background: #fff1e6; }
+  :root[data-theme="dark"] .tka-soon { color: #fdba74; background: #3a2417; }
+  /* perforated stub */
+  .tka-stub { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 18px; border-left: 2px dashed var(--tk-border); }
+  .tka-stub::before, .tka-stub::after { content: ""; position: absolute; left: -13px; width: 24px; height: 24px; border-radius: 50%; background: var(--tk-page-bg); }
+  .tka-stub::before { top: -12px; } .tka-stub::after { bottom: -12px; }
+  .tka-stub .tka-qr-mini { width: 64px; height: 64px; color: var(--tk-text); opacity: .85; }
+  .tka-stub .tka-btn { height: 40px; padding: 0 16px; font-size: 13.5px; }
+  .tka-stub small { font-size: 12px; color: var(--tk-dim); }
+  .tka-ticket.tka-past { opacity: .78; }
+  .tka-ticket.tka-past .tka-ticket-photo img { filter: grayscale(.6); }
+  .tka-ticket.tka-past .tka-stub { justify-content: center; }
+
+  /* Generic list rows */
+  .tka-list { padding: 6px 22px; }
+  .tka-row { display: flex; align-items: center; gap: 14px; padding: 16px 0; border-top: 1px solid var(--tk-border); }
+  .tka-row:first-child { border-top: 0; }
+  .tka-row .tka-ri { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 13px; flex-shrink: 0; background: color-mix(in srgb, var(--hue) var(--tk-tint-alpha), transparent); color: var(--hue); }
+  .tka-row .tka-ri svg { width: 19px; height: 19px; }
+  .tka-row .tka-rt { flex: 1; min-width: 0; }
+  .tka-row .tka-rt b { display: block; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+  .tka-row .tka-rt small { display: block; margin-top: 2px; font-size: 13px; color: var(--tk-muted); }
+  .tka-row .tka-amt { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .tka-pill { height: 24px; padding: 0 9px; display: inline-flex; align-items: center; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .tka-pill.tka-ok { background: var(--tk-success-soft); color: var(--tk-success); }
+  .tka-pill.tka-ref { background: var(--tk-raised); color: var(--tk-muted); }
+  .tka-icon-ghost { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%; color: var(--tk-muted); transition: background-color .2s, color .2s; }
+  .tka-icon-ghost:hover { background: var(--tk-raised); color: var(--tk-text); }
+  .tka-icon-ghost svg { width: 18px; height: 18px; }
+  .tka-group-title { margin: 26px 0 10px 4px; font-size: 13px; font-weight: 600; color: var(--tk-muted); }
+  .tka-group-title:first-child { margin-top: 0; }
+
+  /* Settings */
+  .tka-field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 22px; }
+  .tka-fld { display: grid; gap: 7px; }
+  .tka-fld label { font-size: 13px; font-weight: 600; }
+  .tka-fld input { height: 48px; padding: 0 14px; border-radius: 14px; border: 1px solid transparent; background: var(--tk-raised); font: inherit; font-size: 15px; color: var(--tk-text); outline: none; transition: border-color .2s, box-shadow .2s, background-color .2s; }
+  .tka-fld input:focus { background: var(--tk-surface); border-color: var(--tk-accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--tk-accent) 14%, transparent); }
+  .tka-save-row { display: flex; justify-content: flex-end; gap: 8px; padding: 0 22px 22px; }
+  .tka-btn.tka-sm { height: 40px; padding: 0 16px; font-size: 14px; }
+  .tka-btn.tka-ghost { background: transparent; color: var(--tk-text); border: 1px solid var(--tk-border); box-shadow: none; }
+  .tka-btn.tka-ghost:hover { background: var(--tk-raised); }
+  .tka-linked { font-size: 13px; font-weight: 600; color: var(--tk-success); display: inline-flex; align-items: center; gap: 5px; }
+  .tka-linked svg { width: 14px; height: 14px; }
+
+  /* Switch */
+  .tka-switch { position: relative; width: 46px; height: 28px; flex-shrink: 0; border-radius: 999px; background: var(--tk-border); transition: background-color .25s; }
+  .tka-switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgb(0 0 0 / .2); transition: transform .25s cubic-bezier(.3,.7,.2,1); }
+  .tka-switch[aria-checked="true"] { background: var(--tk-primary); }
+  .tka-switch[aria-checked="true"]::after { transform: translateX(18px); }
+
+  /* Help */
+  .tka-faq details { border-top: 1px solid var(--tk-border); }
+  .tka-faq details:first-child { border-top: 0; }
+  .tka-faq summary { list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 0; cursor: pointer; font-size: 15px; font-weight: 600; }
+  .tka-faq summary::-webkit-details-marker { display: none; }
+  .tka-faq summary svg { width: 18px; height: 18px; color: var(--tk-dim); transition: transform .25s; }
+  .tka-faq details[open] summary svg { transform: rotate(180deg); }
+  .tka-faq p { margin: -6px 0 18px; font-size: 14.5px; line-height: 1.6; color: var(--tk-muted); }
+  .tka-support { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; margin-top: 16px; padding: 20px 22px; }
+  .tka-support b { display: block; font-size: 16px; font-weight: 650; }
+  .tka-support small { color: var(--tk-muted); font-size: 13.5px; }
+  .tka-support .tka-acts { display: flex; gap: 8px; }
+
+  /* Empty */
+  .tka-empty-state { display: grid; justify-items: center; gap: 10px; padding: 56px 20px; text-align: center; }
+  .tka-empty-state svg { width: 44px; height: 44px; color: var(--tk-accent); }
+  .tka-empty-state b { font-size: 17px; font-weight: 650; }
+  .tka-empty-state p { margin: 0 0 6px; font-size: 14px; color: var(--tk-muted); }
+
+  /* Ticket modal */
+  .tka-modal { position: fixed; inset: 0; z-index: 100; display: none; place-items: center; padding: 20px; background: rgb(14 10 22 / .4); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+  .tka-modal.tka-open { display: grid; animation: tka-fade .25s ease; }
+  @keyframes tka-fade { from { opacity: 0; } }
+  .tka-pass { position: relative; width: min(380px, 100%); border-radius: 28px; overflow: hidden; background: var(--tk-surface); box-shadow: 0 30px 80px -20px rgb(0 0 0 / .5); animation: tka-pass-in .35s cubic-bezier(.3,.7,.2,1); }
+  @keyframes tka-pass-in { from { opacity: 0; transform: translateY(16px) scale(.97); } }
+  .tka-pass-top { position: relative; height: 150px; }
+  .tka-pass-top img { width: 100%; height: 100%; object-fit: cover; }
+  .tka-pass-top::after { content: ""; position: absolute; inset: 0; background: linear-gradient(0deg, rgb(10 8 16 / .75), transparent 60%); }
+  .tka-pass-top h3 { position: absolute; z-index: 1; left: 20px; right: 20px; bottom: 14px; margin: 0; color: #fff; font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
+  .tka-pass-close { position: absolute; z-index: 2; top: 12px; right: 12px; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: rgb(18 14 26 / .4); color: #fff; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+  .tka-pass-close svg { width: 16px; height: 16px; }
+  .tka-pass-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 18px 20px; }
+  .tka-pass-grid small { display: block; font-size: 11.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--tk-dim); }
+  .tka-pass-grid b { font-size: 14.5px; font-weight: 600; }
+  .tka-pass-cut { position: relative; height: 0; border-top: 2px dashed var(--tk-border); margin: 0 20px; }
+  .tka-pass-cut::before, .tka-pass-cut::after { content: ""; position: absolute; top: -13px; width: 24px; height: 24px; border-radius: 50%; background: rgb(60 50 80); }
+  .tka-pass-cut::before { left: -32px; } .tka-pass-cut::after { right: -32px; }
+  .tka-pass-qr { display: grid; justify-items: center; gap: 8px; padding: 20px 20px 10px; }
+  .tka-pass-qr .tka-qr { width: 190px; height: 190px; padding: 12px; border-radius: 18px; background: #fff; color: #151c27; }
+  .tka-pass-qr small { font-size: 12.5px; color: var(--tk-muted); font-variant-numeric: tabular-nums; letter-spacing: .08em; }
+  .tka-pass-dots { display: flex; justify-content: center; gap: 6px; padding-bottom: 6px; }
+  .tka-pass-dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--tk-border); }
+  .tka-pass-dots i.tka-on { background: var(--tk-accent); width: 18px; border-radius: 9px; }
+  .tka-pass-acts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 12px 20px 20px; }
+
+  .tka-toast { position: fixed; left: 50%; bottom: 28px; z-index: 120; display: inline-flex; align-items: center; gap: 8px; padding: 11px 16px 11px 13px; border-radius: 999px; background: #151c27; color: #fff; font-size: 14px; font-weight: 500; box-shadow: 0 14px 30px -10px rgb(0 0 0 / .45); transform: translate(-50%, 20px); opacity: 0; pointer-events: none; transition: transform .3s cubic-bezier(.3,.7,.2,1), opacity .3s; }
+  :root[data-theme="dark"] .tka-toast { background: #f5f3fa; color: #151c27; }
+  .tka-toast.tka-show { transform: translate(-50%, 0); opacity: 1; }
+  .tka-toast svg { width: 16px; height: 16px; color: #4ade80; }
+
+  .tka-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 46px; padding: 0 22px; border-radius: 999px; font-size: 15px; font-weight: 600; white-space: nowrap; background: var(--tk-primary); color: #fff; transition: background-color .2s, transform .15s; }
+  .tka-btn:hover { background: var(--tk-primary-hover); }
+  .tka-btn:active { transform: scale(.98); }
+  .tka-btn svg { width: 17px; height: 17px; }
+  .tka-btn.tka-soft { background: var(--tk-accent-soft); color: var(--tk-accent); }
+  .tka-btn.tka-soft:hover { background: color-mix(in srgb, var(--tk-accent) 18%, var(--tk-surface)); }
+
+  /* Mobile tab bar replaces the sidebar */
+  .tka-mtabs { display: none; }
+  @media (max-width: 980px) {
+    .tka-acc-layout { grid-template-columns: 1fr; }
+    .tka-side { position: static; }
+    .tka-side .tka-nav, .tka-side .tka-pro-teaser { display: none; }
+    .tka-mtabs { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; margin: 0 -24px; padding: 0 24px 2px; }
+    .tka-mtabs a { flex-shrink: 0; height: 38px; padding: 0 14px; display: inline-flex; align-items: center; gap: 7px; border-radius: 999px; background: var(--tk-surface); border: 1px solid var(--tk-border); font-size: 13.5px; font-weight: 500; color: var(--tk-muted); }
+    .tka-mtabs a.tka-on { background: var(--tk-text); color: var(--tk-surface); border-color: var(--tk-text); }
+    .tka-mtabs svg { width: 16px; height: 16px; }
+    .tka-ticket { grid-template-columns: 160px minmax(0, 1fr); }
+    .tka-stub { grid-column: 1 / -1; flex-direction: row; justify-content: space-between; border-left: 0; border-top: 2px dashed var(--tk-border); padding: 14px 18px; }
+    .tka-stub::before, .tka-stub::after { top: -13px; left: auto; }
+    .tka-stub::before { left: -13px; } .tka-stub::after { right: -13px; bottom: auto; }
+    .tka-stub .tka-qr-mini { width: 40px; height: 40px; }
+    .tka-ticket-photo { border-radius: 24px 0 0 0; }
+  }
+  @media (max-width: 640px) {
+    .tka-acc-layout { margin-top: 16px; gap: 16px; }
+    .tka-mtabs { margin: 0 -16px; padding: 0 16px 2px; }
+    .tka-view-head h1 { font-size: 26px; }
+    .tka-ticket { grid-template-columns: 1fr; }
+    .tka-ticket-photo { height: 150px; border-radius: 24px 24px 0 0; }
+    .tka-ticket-body { padding: 16px 18px; }
+    .tka-stub small { display: none; }
+    .tka-field-row { grid-template-columns: 1fr; padding: 18px; }
+    .tka-list { padding: 4px 18px; }
+    .tka-seg button { padding: 0 12px; }
+  }
+  #favgrid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  @media (max-width: 1100px) { #favgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+  /* ================= v2: full feature set ================= */
+  .tka-stats { display: flex; gap: 16px; margin-top: 6px; font-size: 13.5px; color: var(--tk-muted); }
+  .tka-stats b { color: var(--tk-text); font-weight: 700; }
+  .tka-help-line { margin: 18px 4px 0; font-size: 13.5px; color: var(--tk-muted); }
+  .tka-help-line a { color: var(--tk-accent); font-weight: 600; }
+  .tka-nav .tka-back { color: var(--tk-muted); }
+  .tka-nav .tka-count.tka-hot { background: #f43f5e; color: #fff; }
+  .tka-me small { color: var(--tk-dim); }
+
+  /* Ticket card v2 */
+  .tka-ticket { grid-template-columns: 200px minmax(0, 1fr) 200px; min-height: 200px; }
+  .tka-ticket-photo { display: block; }
+  .tka-ticket-body { gap: 10px; }
+  .tka-t-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+  .tka-t-top a:hover { color: var(--tk-accent); }
+  .tka-t-top .tka-seat-pill { flex-shrink: 0; }
+  .tka-tmeta a { display: flex; align-items: center; gap: 8px; color: var(--tk-muted); }
+  .tka-tmeta a:hover { color: var(--tk-accent); }
+  .tka-tmeta a svg:last-child { width: 13px; height: 13px; }
+  .tka-t-pick { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border-radius: 14px; background: var(--tk-raised); }
+  .tka-t-pick b { display: block; font-size: 14px; font-weight: 600; }
+  .tka-t-pick small { font-size: 12.5px; color: var(--tk-muted); }
+  .tka-pager { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; font-weight: 600; color: var(--tk-muted); font-variant-numeric: tabular-nums; }
+  .tka-pager button { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--tk-surface); color: var(--tk-text); }
+  .tka-pager button[disabled] { opacity: .35; cursor: default; }
+  .tka-pager svg { width: 13px; height: 13px; }
+  .tka-booking { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--tk-muted); }
+  .tka-booking svg { width: 15px; height: 15px; }
+  .tka-booking button { margin-left: auto; font-size: 13px; font-weight: 600; color: #e11d48; }
+  .tka-t-org { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: auto; }
+  .tka-t-org button { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--tk-accent); }
+  .tka-t-org svg { width: 15px; height: 15px; }
+  .tka-stub { gap: 10px; padding: 16px; }
+  .tka-t-status { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 9px; border-radius: 999px; font-size: 11.5px; font-weight: 700; }
+  .tka-t-status::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .tka-t-status.tka-ok { color: var(--tk-success); background: var(--tk-success-soft); }
+  .tka-t-status.tka-past { color: var(--tk-muted); background: var(--tk-raised); }
+  .tka-t-status.tka-off { color: #e11d48; background: color-mix(in srgb, #e11d48 10%, transparent); }
+  .tka-qr-btn { display: grid; place-items: center; padding: 6px; border-radius: 12px; transition: background-color .2s; }
+  .tka-qr-btn:hover { background: var(--tk-raised); }
+  .tka-stub .tka-btn { width: 100%; }
+  .tka-stub-acts { display: flex; gap: 4px; }
+  .tka-stub-acts button { display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 9px; border-radius: 999px; font-size: 12.5px; font-weight: 600; color: var(--tk-muted); }
+  .tka-stub-acts button:hover { background: var(--tk-raised); color: var(--tk-text); }
+  .tka-stub-acts svg { width: 14px; height: 14px; }
+  .tka-t-no { font-size: 12px; color: var(--tk-dim); font-variant-numeric: tabular-nums; }
+
+  /* Sheet (modal) */
+  .tka-sheet { width: min(440px, 100%); max-height: calc(100vh - 40px); display: flex; flex-direction: column; border-radius: 26px; overflow: hidden; background: var(--tk-surface); box-shadow: 0 30px 80px -20px rgb(0 0 0 / .5); animation: tka-pass-in .35s cubic-bezier(.3,.7,.2,1); }
+  .tka-sheet.tka-pass { width: min(380px, 100%); }
+  :root[data-theme="dark"] .tka-sheet { border: 1px solid var(--tk-border); }
+  .tka-sheet-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 18px 12px 22px; }
+  .tka-sheet-head b { display: block; font-size: 17px; font-weight: 700; letter-spacing: -0.02em; }
+  .tka-sheet-head small { display: block; margin-top: 2px; font-size: 13px; color: var(--tk-muted); }
+  .tka-sheet-body { padding: 4px 22px 18px; display: grid; gap: 14px; }
+  .tka-sheet .tka-list { padding: 0 22px 12px; }
+  .tka-sheet-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 22px 20px; border-top: 1px solid var(--tk-border); }
+  .tka-sheet-foot .tka-btn { height: 42px; font-size: 14px; }
+  .tka-terms { padding: 14px; border-radius: 16px; background: var(--tk-raised); }
+  .tka-terms b { font-size: 13.5px; font-weight: 600; }
+  .tka-terms p { margin: 4px 0 0; font-size: 13.5px; line-height: 1.5; color: var(--tk-muted); }
+  .tka-sum-row { display: flex; justify-content: space-between; align-items: baseline; font-size: 14px; color: var(--tk-muted); }
+  .tka-sum-row b { font-size: 22px; color: var(--tk-text); letter-spacing: -0.02em; }
+  .tka-note-sm { margin: 0; font-size: 13px; color: var(--tk-muted); }
+  .tka-btn.tka-danger { background: #e11d48; }
+  .tka-btn.tka-danger:hover { background: #be123c; }
+  .tka-pass-acts.tka-one { grid-template-columns: 1fr; }
+  .tka-form textarea, .tka-fld select, .tka-composer input { font: inherit; font-size: 15px; color: var(--tk-text); border: 1px solid transparent; background: var(--tk-raised); border-radius: 14px; outline: none; transition: border-color .2s, box-shadow .2s, background-color .2s; }
+  .tka-form textarea { padding: 12px 14px; resize: vertical; }
+  .tka-fld select { height: 48px; padding: 0 12px; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238a8496' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; }
+  .tka-form textarea:focus, .tka-fld select:focus, .tka-composer input:focus { background-color: var(--tk-surface); border-color: var(--tk-accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--tk-accent) 14%, transparent); }
+  .tka-code-input { height: 58px; text-align: center; font-size: 26px; letter-spacing: .5em; font-weight: 700; border-radius: 16px; border: 1px solid var(--tk-border); background: var(--tk-raised); color: var(--tk-text); outline: none; }
+  .tka-code-input:focus { border-color: var(--tk-accent); }
+  .tka-link-btn { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 600; color: var(--tk-accent); }
+  .tka-link-btn svg { width: 14px; height: 14px; }
+  .tka-link-btn.tka-muted { color: var(--tk-dim); }
+  .tka-attach { display: grid; justify-items: center; gap: 2px; padding: 16px; border-radius: 16px; border: 1.5px dashed var(--tk-border); font-size: 14px; font-weight: 600; color: var(--tk-accent); }
+  .tka-attach svg { width: 18px; height: 18px; }
+  .tka-attach small { font-size: 12px; font-weight: 400; color: var(--tk-dim); }
+
+  /* Chat */
+  .tka-chat { display: flex; flex-direction: column; gap: 10px; padding: 6px 22px 16px; overflow-y: auto; min-height: 220px; flex: 1; }
+  .tka-msg { max-width: 82%; align-self: flex-start; }
+  .tka-msg p { margin: 0; padding: 10px 14px; border-radius: 18px 18px 18px 6px; background: var(--tk-raised); font-size: 14.5px; line-height: 1.45; }
+  .tka-msg.tka-mine { align-self: flex-end; text-align: right; }
+  .tka-msg.tka-mine p { background: var(--tk-primary); color: #fff; border-radius: 18px 18px 6px 18px; text-align: left; }
+  .tka-msg time { display: block; margin-top: 4px; font-size: 11.5px; color: var(--tk-dim); }
+  .tka-msg .tka-file { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; padding: 6px 10px; border-radius: 10px; background: var(--tk-raised); font-size: 12.5px; font-weight: 600; }
+  .tka-msg .tka-file svg { width: 13px; height: 13px; }
+  .tka-composer { display: flex; align-items: center; gap: 8px; padding: 12px 14px 14px; border-top: 1px solid var(--tk-border); }
+  .tka-composer input { flex: 1; height: 44px; padding: 0 14px; }
+  .tka-composer .tka-btn { width: 44px; height: 44px; padding: 0; }
+
+  /* Settings */
+  .tka-field-row.tka-three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .tka-row .tka-btn.tka-sm { height: 36px; padding: 0 14px; font-size: 13.5px; }
+  .tka-row .tka-btn svg { width: 15px; height: 15px; }
+  .tka-linked { white-space: nowrap; }
+
+  /* Notifications */
+  .tka-bot { display: flex; align-items: center; gap: 14px; padding: 18px 20px; }
+  .tka-bot-ico { display: grid; place-items: center; width: 46px; height: 46px; border-radius: 15px; background: #2aabee; color: #fff; flex-shrink: 0; }
+  .tka-bot-ico svg { width: 22px; height: 22px; }
+  .tka-bot-t { flex: 1; min-width: 0; }
+  .tka-bot-t b { display: block; font-size: 16px; font-weight: 650; }
+  .tka-bot-t small { font-size: 13px; color: var(--tk-muted); }
+  .tka-btn.tka-tg { background: #2aabee; }
+  .tka-btn.tka-tg:hover { background: #229ed9; }
+  .tka-notif-cols { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 20px; align-items: start; margin-top: 8px; }
+  .tka-notif-cols .tka-group-title { margin-top: 18px; }
+  .tka-inbox-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .tka-inbox-head .tka-group-title { margin-bottom: 10px; }
+  .tka-seg.tka-small button { height: 30px; padding: 0 12px; font-size: 13px; }
+  .tka-row.tka-note { align-items: flex-start; position: relative; }
+  .tka-row.tka-note .tka-ri { width: 36px; height: 36px; border-radius: 12px; }
+  .tka-row.tka-note .tka-ri svg { width: 17px; height: 17px; }
+  .tka-row.tka-note.tka-unread::after { content: ""; position: absolute; right: 2px; top: 22px; width: 8px; height: 8px; border-radius: 50%; background: var(--tk-accent); }
+  .tka-n-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: 8px; }
+  .tka-n-acts time, .tka-muted-sm { font-size: 12px; color: var(--tk-dim); }
+  .tka-empty-mini { padding: 32px 0; text-align: center; font-size: 14px; color: var(--tk-muted); }
+
+  /* Payments */
+  .tka-row.tka-pay { align-items: flex-start; }
+  .tka-pay-r { display: grid; justify-items: end; gap: 6px; }
+  .tka-pill.tka-bad { background: color-mix(in srgb, #e11d48 12%, transparent); color: #e11d48; }
+  .tka-pill.tka-wait { background: #fff1e6; color: #c2410c; }
+  .tka-pill.tka-work { background: var(--tk-accent-soft); color: var(--tk-accent); }
+  .tka-pill.tka-done { background: var(--tk-raised); color: var(--tk-muted); }
+
+  /* Support */
+  .tka-support-grid { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 16px; align-items: start; }
+  .tka-cases { padding: 6px 8px 8px; }
+  .tka-group-title.tka-in { margin: 10px 10px 8px; }
+  .tka-case { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px; border-radius: 14px; text-align: left; transition: background-color .2s; }
+  .tka-case:hover { background: var(--tk-raised); }
+  .tka-case.tka-on { background: var(--tk-accent-soft); }
+  .tka-case b { display: block; font-size: 14px; font-weight: 600; }
+  .tka-case small { font-size: 12px; color: var(--tk-dim); }
+  .tka-thread { display: flex; flex-direction: column; min-height: 420px; }
+  .tka-closed-note { margin: 0; padding: 14px; text-align: center; font-size: 13px; color: var(--tk-dim); border-top: 1px solid var(--tk-border); }
+
+  @media (max-width: 1100px) { .tka-notif-cols { grid-template-columns: 1fr; } .tka-support-grid { grid-template-columns: 1fr; } .tka-thread { min-height: 0; } }
+  @media (max-width: 980px) { .tka-ticket { grid-template-columns: 160px minmax(0, 1fr); } .tka-stub { flex-wrap: wrap; } .tka-stub .tka-btn { width: auto; } .tka-qr-btn { display: none; } }
+  @media (max-width: 640px) {
+    .tka-field-row.tka-three { grid-template-columns: 1fr; }
+    .tka-stats { gap: 12px; font-size: 12.5px; }
+    .tka-stub { justify-content: flex-start; }
+    .tka-stub .tka-btn { flex: 1; }
+    .tka-row.tka-pay { flex-wrap: wrap; }
+    .tka-modal { padding: 0; place-items: end center; }
+    .tka-sheet { width: 100%; border-radius: 26px 26px 0 0; max-height: 92vh; }
+    .tka-sheet.tka-pass { width: 100%; }
+  }
+  .tka-pill { white-space: nowrap; }
+  .tka-tickets { overflow: hidden; padding: 2px; margin: -2px; }
+  @media (max-width: 640px) {
+    .tka-ticket { grid-template-columns: 1fr; }
+    .tka-ticket-photo { height: 160px; border-radius: 24px 24px 0 0; }
+    .tka-t-top { flex-wrap: wrap; }
+    .tka-t-org { gap: 8px 14px; }
+  }
+  /* Event photos keep the site's fixed 16:9 card ratio — set inside the card, never cropped */
+  .tka-ticket { grid-template-columns: 300px minmax(0, 1fr) 180px; min-height: 0; align-items: center; }
+  .tka-ticket-photo { position: relative; align-self: center; aspect-ratio: 16 / 9; height: auto; margin: 10px 0 10px 10px; border-radius: 16px; overflow: hidden; }
+  .tka-ticket-photo img { position: absolute; inset: 0; }
+  .tka-ticket-photo .tka-date-badge { top: 8px; left: 8px; width: 42px; height: 46px; border-radius: 12px; }
+  .tka-ticket-photo .tka-date-badge b { font-size: 16px; }
+  .tka-ticket-body { gap: 8px; padding: 14px 18px; }
+  .tka-ticket-body h3 { font-size: 17px; }
+  .tka-t-pick { padding: 8px 10px 8px 12px; }
+  .tka-ticket.tka-past .tka-ticket-photo img { filter: grayscale(.6); }
+  .tka-stub { align-self: stretch; }
+  @media (max-width: 1100px) { .tka-ticket { grid-template-columns: 240px minmax(0, 1fr) 170px; } }
+  @media (max-width: 980px) { .tka-ticket { grid-template-columns: 240px minmax(0, 1fr); } .tka-ticket-photo { border-radius: 16px; } }
+  @media (max-width: 640px) { .tka-ticket { grid-template-columns: 1fr; } .tka-ticket-photo { height: auto; margin: 8px 8px 0; border-radius: 18px; } }

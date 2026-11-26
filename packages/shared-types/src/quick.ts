@@ -1,0 +1,58 @@
+import { z } from "zod";
+export const CART_MAX_ITEMS = 10;
+export const CART_MAX_QUANTITY = 10;
+export const CART_SELECTION_INVALID_MESSAGE = "Choose up to 10 distinct tickets and seats, with at most one whole table";
+export interface CartRuleInput { tickets?: ReadonlyArray<{ ticketTypeId: string; quantity: number }> | undefined; seatIds?: readonly string[] | undefined; tableId?: string | null | undefined }
+/** Single source of truth for cart selection rules; returns a reason or null when the cart is valid. */
+export function cartRuleViolation(cart: CartRuleInput): string | null {
+  const tickets = cart.tickets ?? [];
+  const seatIds = cart.seatIds ?? [];
+  if (!Array.isArray(tickets) || !Array.isArray(seatIds)) return "tickets and seatIds must be arrays";
+  if (!tickets.length && !seatIds.length && !cart.tableId) return "cart is empty";
+  if (tickets.length > CART_MAX_ITEMS || seatIds.length > CART_MAX_ITEMS) return "too many cart lines";
+  if (tickets.some((item) => !Number.isInteger(item.quantity) || item.quantity < 1 || item.quantity > CART_MAX_QUANTITY)) return "invalid ticket quantity";
+  if (new Set(tickets.map((item) => item.ticketTypeId)).size !== tickets.length) return "duplicate ticket types";
+  if (new Set(seatIds).size !== seatIds.length) return "duplicate seats";
+  if (tickets.reduce((sum, item) => sum + item.quantity, seatIds.length) > CART_MAX_ITEMS) return "total quantity exceeds the cart limit";
+  return null;
+}
+export const quickIdSchema = z.uuid();
+
+export const quickStartSchema = z.object({ name: z.string().trim().min(1).max(100) }).strict();
+export const quickEmailRequestSchema = z.object({ address: z.email().max(254) }).strict();
+export const quickEmailVerifySchema = quickEmailRequestSchema.extend({ challengeId: z.uuid(), code: z.string().regex(/^\d{6}$/) }).strict();
+export const checkoutEmailChoiceSchema = z.object({ address: z.email().max(254), grant: z.string().regex(/^[A-Za-z0-9_-]{43}$/).optional() }).strict();
+export const quickTicketSchema = z.object({ ticketTypeId: z.uuid(), quantity: z.number().int().min(1).max(CART_MAX_QUANTITY), termsAccepted: z.literal(true), contentLocale:z.enum(["ru","en","kk"]).optional(),policyRevision:z.number().int().positive().optional(), emailDelivery: checkoutEmailChoiceSchema.optional() }).strict();
+export const quickTableSchema = z.object({ tableId: z.uuid(), termsAccepted: z.literal(true), contentLocale:z.enum(["ru","en","kk"]).optional(),policyRevision:z.number().int().positive().optional(), emailDelivery: checkoutEmailChoiceSchema.optional() }).strict();
+export const quickSeatsSchema = z.object({ seatIds: z.array(z.uuid()).min(1).max(CART_MAX_QUANTITY), termsAccepted: z.literal(true), contentLocale:z.enum(["ru","en","kk"]).optional(),policyRevision:z.number().int().positive().optional(), emailDelivery: checkoutEmailChoiceSchema.optional() }).strict();
+export const quickCartSchema = z.object({ eventId: z.uuid(), tickets: z.array(z.object({ ticketTypeId: z.uuid(), quantity: z.number().int().min(1).max(CART_MAX_QUANTITY) }).strict()).max(CART_MAX_ITEMS), tableId: z.uuid().optional(), seatIds: z.array(z.uuid()).max(CART_MAX_ITEMS), termsAccepted: z.literal(true), contentLocale:z.enum(["ru","en","kk"]).optional(),policyRevision:z.number().int().positive().optional(), emailDelivery: checkoutEmailChoiceSchema.optional() }).strict()
+  .refine((value) => cartRuleViolation(value) === null);
+export const quickVerifySchema = z.object({ token: z.string().regex(/^[A-Za-z0-9_-]{43}$/), telegramId: z.string().regex(/^[1-9][0-9]{0,15}$/), chatId: z.string().regex(/^[1-9][0-9]{0,15}$/), messageId: z.number().int().positive() }).strict();
+export const quickRu = {
+  title: "Покупка без регистрации", name: "Ваше имя", start: "Продолжить через Telegram", verify: "Подтвердить Telegram",
+  check: "Я подтвердил — проверить", verified: "Telegram подтверждён", checkout: "Перейти к оплате", accept: "Принимаю условия отмены и депозита",
+  error: "Не удалось выполнить действие. Проверьте данные и попробуйте снова.", saved: "Покупка сохранена в личном кабинете",
+  claim: "Сохранить покупку в моём аккаунте", login: "Войти через Telegram и сохранить покупку", refresh: "Обновить статус",
+  qr: "Открыть QR-код", wallet: "Добавить в Apple Wallet", payment: "Оплата", full: "Полная оплата", deposit: "Депозит",
+  waiting: "Откройте бота и подтвердите получение билетов. Аккаунт на сайте не создаётся.", return: "После оплаты вернитесь на эту страницу.",
+  unavailable: "Покупка недоступна. Откройте её в том браузере, где оформляли заказ.", quick: "Купить без регистрации", purchases: "Покупки",
+  quantity: "Количество", seats: "мест", recipientPending: "Подтверждение ещё не получено. Нажмите Start в боте, затем проверьте снова.",
+  informationalFull: "Полная стоимость (справочно)",
+  botPending: "Подтверждаем получение покупки. После оплаты здесь появится ваш билет или бронь.",
+  botVerified: "Telegram подтверждён. Вернитесь на сайт для оплаты — регистрация не требуется.",
+  ticketStatuses: { created: "Создан", pending_payment: "Ожидает оплаты", paid: "Оплачен", active: "Активен", used: "Использован", cancelled: "Отменён", refunded: "Возвращён" },
+};
+export interface QuickSession { sessionToken: string; accessToken: string; telegramUrl: string; expiresAt: string; accessExpiresAt: string }
+export interface QuickOrderStatus {
+  acceptedPolicy?:import("./event-creation-v2.js").PurchaseSnapshotV2["refund"];
+  createdAt?: string; buyerName?: string;
+  orderId: string; eventId: string | null; status: string; title: string; sourceLocale?: "ru" | "kk" | "en"; paymentMode: "deposit" | "full_payment"; amountDue: number; fullAmount: number | null;
+  currency: string; cancellationTerms: string | null; depositTerms: string | null; expiresAt: string | null; linked: boolean;
+  deliveryStatus: "pending" | "confirmed" | "unavailable";
+  emailDelivery: { status: string; address: string | null; acceptedAt: string | null };
+  walletAvailable: boolean;
+  event: { date: string; time: string; timezone: string; address: string } | null;
+  tickets: Array<{ id: string; name: string; seatLabel: string | null; status: string; number?: string; price?: number }>;
+  booking: { id: string; status: string; table: { number: number; name: string | null } } | null;
+  deposit: { amount: number; status: string } | null;
+}

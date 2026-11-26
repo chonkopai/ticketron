@@ -1,0 +1,588 @@
+"use client";
+import { hallTextColor } from '@event-platform/shared-types';
+import React, { useEffect, useLayoutEffect, useRef, useState, useCallback, useId } from 'react';
+import './hall-builder.css';
+import './hall-builder-skin.css';
+import { TableComposer } from './table-composer.jsx';
+import { constrainHallToRoom } from './boundaries.mjs';
+import { SiteIcon } from './site-icons.jsx';
+import { selectionPricing, tableSaleMismatch, assignCategory, savePricingCategory, unpricedInventory, unpricedObjects, frameObjects } from './pricing.mjs';
+import { ObjectList, UnpricedFinder, PricingPanel, PricingConfirmation, inventoryLabel, TYPE_HUE } from './workspace-ui.jsx';
+import { SCALE, CHAIR, TABLE_CHAIR_OFFSET, rulerTicks, withNaturalTableSpacing, COLORS, TYPES, uid, clone, clamp, rotate, makeObject, reconcile, updateObject, resizeObject, fitBlock, bounds, worldBounds, seatPositions, category, resolvedCategory, sellable, copyObjects, copyHall, summary, issues, starterHall, readStored, validateImport, moveSeat, splitStanding, deduplicateCategories, fragmentCategories, insertFragment } from './model.mjs';
+
+const labels = ['Расстановка', 'Цены', 'Проверка'];
+const venueFeatures = [
+  {key:'stage',type:'stage',name:'Сцена',icon:'stage'},
+  {key:'entrance',type:'entrance',name:'Вход / выход',icon:'entrance'},
+  {key:'zone',type:'obstacle',name:'Зона',icon:'standing',w:240,h:180,color:'#b5d9d0'},
+  {key:'bar',type:'obstacle',name:'Барный стол',icon:'rect',w:72,h:40,color:'#c7b193'},
+  {key:'wardrobe',type:'obstacle',name:'Гардероб',icon:'layers',w:160,h:80,color:'#b7c6e1'},
+];
+const tableType = o => ['round', 'rect'].includes(o?.type);
+const units = { seat: 'за место', table: 'за стол', entry: 'за вход' };
+const unitOf = o => o.type === 'standing' ? 'entry' : tableType(o) && o.saleMode === 'whole_table' ? 'table' : 'seat';
+const money = (n, currency = 'KZT') => n == null ? 'Без цены' : new Intl.NumberFormat('ru-RU', { style: 'currency', currency, minimumFractionDigits: 0, maximumFractionDigits: 2, currencyDisplay: 'narrowSymbol' }).format(n);
+const Icon = SiteIcon;
+const textOn = color => /^#[0-9a-f]{6}$/i.test(color) ? hallTextColor(color) : '#fff';
+
+function Btn({ icon, children, variant = '', className = '', ...props }) { return <button className={`btn ${variant} ${className}`} type="button" {...props}>{icon && <Icon name={icon} size={17}/>} {children}</button>; }
+function ToolbarDimension({label,value,onCommit}) {
+  const [draft,setDraft]=useState(String(value));
+  useEffect(()=>setDraft(String(value)),[value]);
+  return <label className="hall-dimension"><span>{label}</span><span className="hall-dimension-input"><input aria-label={`${label} зала, м`} type="number" min="2" max="200" step="0.1" value={draft} onChange={e=>setDraft(e.target.value)} onBlur={e=>{const n=Number(e.target.value);if(e.target.value.trim()&&Number.isFinite(n)&&n>=2&&n<=200){if(n!==value&&onCommit(n)===false)setDraft(String(value));}else setDraft(String(value));}} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();e.currentTarget.blur();}if(e.key==='Escape'){e.preventDefault();e.stopPropagation();e.currentTarget.value=String(value);setDraft(String(value));e.currentTarget.blur();}}}/><small>м</small></span></label>;
+}
+// Whole room with its walls and labels, leaving space for the floating toolbar and zoom controls.
+function roomView(hall){const pad=Math.max(70,hall.room.w*.07);return {x:-pad,y:-pad*1.7,w:hall.room.w+pad*2,h:hall.room.h+pad*3.2};}
+function StepNav({step,disabled,onChange}) {
+  const nav=useRef(null),[thumb,setThumb]=useState(null);
+  useLayoutEffect(()=>{const place=()=>{const b=nav.current?.querySelectorAll('button')[step];if(b)setThumb({width:b.offsetWidth,transform:`translateX(${b.offsetLeft}px)`});};place();const o=new ResizeObserver(place);if(nav.current)o.observe(nav.current);return()=>o.disconnect();},[step]);
+  return <nav ref={nav} className="hb-steps" aria-label="Шаги создания схемы">{labels.map((label,index)=><button key={label} type="button" disabled={disabled} className={step===index?'on':step>index?'done':''} aria-current={step===index?'step':undefined} onClick={()=>onChange(index)}><span>{step>index?<Icon name="check" size={14}/>:index+1}</span>{label}</button>)}<i className="hb-steps-thumb" style={thumb??{opacity:0}}/></nav>;
+}
+function Field({ label, children, hint, className = '' }) { return <label className={`field ${className}`}><span>{label}</span>{children}{hint && <small>{hint}</small>}</label>; }
+function NumberField({ label, value, onChange, min = 0, max = 1000, step = 1, suffix = '', hint }) {
+  const [draft,setDraft]=useState(String(value??''));
+  useEffect(()=>setDraft(String(value??'')),[value]);
+  function finishDraft(e) {
+    const draft=e.currentTarget.value,n=Number(draft);
+    setDraft(String(value??''));
+    if(!draft.trim())onChange(null);
+    else if(!e.currentTarget.validity.stepMismatch&&Number.isFinite(n)&&n>=min&&n<=max)onChange(n);
+  }
+  return <Field label={label} hint={hint}><div className="number-field"><button type="button" aria-label={`Уменьшить: ${label}`} disabled={Number(value) <= min} onClick={() => onChange(Math.max(min, Number(value || 0) - step))}>−</button><input aria-label={label} aria-invalid={value!=null&&(Number(value)<min||Number(value)>max)||undefined} type="number" min={min} max={max} step={step<1?'any':step} value={draft} onChange={e=>setDraft(e.target.value)} onBlur={finishDraft} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();e.currentTarget.blur();}if(e.key==='Escape'){e.preventDefault();e.stopPropagation();setDraft(String(value??''));e.currentTarget.value=String(value??'');e.currentTarget.blur();}}}/>{suffix && <em>{suffix}</em>}<button type="button" aria-label={`Увеличить: ${label}`} disabled={Number(value) >= max} onClick={() => onChange(Math.min(max, Number(value || 0) + step))}>+</button></div></Field>;
+}
+function SnapControl({checked,onChange}) {
+  const tooltipId=useId(),tooltip=useRef(null),button=useRef(null);
+  const [open,setOpen]=useState(false),[position,setPosition]=useState({top:0,left:0,width:286});
+  const place=()=>{const rect=button.current.getBoundingClientRect(),width=Math.min(286,window.innerWidth-24);setPosition({top:rect.bottom+10,left:Math.max(12,Math.min(rect.left-12,window.innerWidth-width-12)),width});};
+  return <div className="hall-snap-control" onPointerEnter={e=>{if(e.pointerType==='mouse'){place();tooltip.current.showPopover();}}} onPointerLeave={e=>{if(e.pointerType==='mouse')tooltip.current.hidePopover();}}>
+    <label className="hall-view-toggle"><input type="checkbox" checked={checked} onChange={e=>onChange(e.target.checked)} aria-describedby={tooltipId}/><span>Привязка к сетке</span></label>
+    <button ref={button} type="button" className="hall-snap-help" aria-label="О привязке к сетке" aria-expanded={open} aria-controls={tooltipId} popoverTarget={tooltipId} onClick={e=>{e.preventDefault();place();tooltip.current.showPopover();}}><Icon name="help" size={16}/></button>
+    <span ref={tooltip} id={tooltipId} role="tooltip" popover="auto" className="hall-snap-tooltip" style={position} onToggle={e=>setOpen(e.newState==='open')}>Выравнивает объекты по сетке, а входы — по стенам. Удерживайте Alt при перетаскивании, чтобы двигать свободно.</span>
+  </div>;
+}
+function Toggle({ label, checked, onChange, hint }) { return <button type="button" role="switch" aria-checked={checked} className="toggle-row" onClick={() => onChange(!checked)}><span><b>{label}</b>{hint && <small>{hint}</small>}</span><i className={checked ? 'on' : ''}/></button>; }
+function Disclosure({ title, children, open = false }) { return <details className="disclosure" open={open || undefined}><summary>{title}<Icon name="chevron" size={15}/></summary><div>{children}</div></details>; }
+function getPoint(svg, event) { const p = new DOMPoint(event.clientX, event.clientY); return p.matrixTransform(svg.getScreenCTM().inverse()); }
+function normalizeAngle(degrees) { return ((degrees + 540) % 360) - 180; }
+function getColor(hall, o, seat) { if (!sellable(hall, o, seat)) return 'var(--ticket-dim)'; return resolvedCategory(hall, o, seat, o.rows?.find(r => r.id === seat?.rowId))?.color ?? (['stage', 'obstacle', 'entrance'].includes(o.type) ? o.color : 'var(--ticket-dim)'); }
+
+const canPriceObject = object => !object.disabled && ['rows', 'round', 'rect', 'standing', 'seat'].includes(object.type);
+const shapeLayer = object => object.type === 'obstacle' ? 0 : object.type === 'standing' ? 1 : 2;
+
+function Shape({ o, hall, mini = false, preview = false, selected = false, editing = true, unpricedIds = new Set(), detail, selectedSeat, selectedRow, buyer = false, pricing = false, basket = {}, onObject, onSeat, onRow, onHandle, onVertex }) {
+  const b = bounds(o), color = getColor(hall, o), selectedBuyer = !!basket[o.id];
+  const seats = seatPositions(o), whole = tableType(o) && o.saleMode === 'whole_table';
+  const buyerUnit = buyer && !mini && canPriceObject(o) && (whole || o.type === 'standing' || o.type === 'seat');
+  const decorative = (pricing || buyer) && !canPriceObject(o);
+  const interactive = !mini && !preview && !decorative && (!buyer || buyerUnit);
+  const paint = (seat) => whole && !selectedBuyer ? 'var(--ticket-raised)' : (basket[seat.id] || selectedBuyer ? 'var(--ticket-primary)' : getColor(hall, o, seat));
+  return <g role={interactive?'button':undefined} tabIndex={interactive?0:undefined} aria-label={interactive?`${o.name}${whole?' · стол целиком':o.type==='standing'?' · входные билеты':''}`:undefined} aria-pressed={buyerUnit?selectedBuyer:undefined} onKeyDown={e=>{if(interactive&&e.target===e.currentTarget&&(e.key==='Enter'||e.key===' ')){e.preventDefault();onObject?.(e,o);}}} data-object-id={o.id} data-object-type={o.type} pointerEvents={decorative?'none':undefined} transform={`translate(${o.x} ${o.y}) rotate(${o.rotation})`} className={`canvas-object ${selected ? 'selected' : ''} ${o.pinned ? 'pinned' : ''}`}>
+    {o.type === 'rows' && <rect x={-o.w/2} y={-o.h/2} width={o.w} height={o.h} rx="16" fill={pricing || buyer ? 'transparent' : 'color-mix(in srgb, var(--ticket-surface) 72%, transparent)'} stroke={selected ? 'var(--ticket-accent)' : pricing || buyer ? 'none' : 'var(--ticket-border)'} strokeWidth="1" onPointerDown={e => onObject?.(e, o)} onClick={e => buyer && onObject?.(e, o)} />}
+    {o.type === 'round' && <circle r={o.w/2} fill={whole ? selectedBuyer ? 'var(--ticket-primary)' : color : 'var(--ticket-surface)'} fillOpacity={whole && !selectedBuyer ? .18 : 1} stroke={whole ? selectedBuyer ? 'var(--ticket-primary)' : color : 'var(--ticket-border)'} strokeWidth="1.5" onPointerDown={e => onObject?.(e, o)} onClick={e => buyer && onObject?.(e, o)}/>}
+    {o.type === 'rect' && <rect x={-o.w/2} y={-o.h/2} width={o.w} height={o.h} rx="10" fill={whole ? selectedBuyer ? 'var(--ticket-primary)' : color : 'var(--ticket-surface)'} fillOpacity={whole && !selectedBuyer ? .18 : 1} stroke={whole ? selectedBuyer ? 'var(--ticket-primary)' : color : 'var(--ticket-border)'} strokeWidth="1.5" onPointerDown={e => onObject?.(e, o)} onClick={e => buyer && onObject?.(e, o)}/>}
+    {o.type === 'standing' && (o.points ? <polygon points={o.points.map(p => `${p.x * o.w},${p.y * o.h}`).join(' ')} fill={color} fillOpacity={selectedBuyer ? .3 : .14} stroke={color} strokeDasharray={selectedBuyer ? undefined : '6 5'} strokeWidth={selectedBuyer ? 2.5 : 1.5} onPointerDown={e => onObject?.(e, o)} onClick={e => buyer && onObject?.(e, o)} onDoubleClick={e => onVertex?.(e, o, 'add')}/> : <rect x={-o.w/2} y={-o.h/2} width={o.w} height={o.h} rx="16" fill={color} fillOpacity={selectedBuyer ? .3 : .14} stroke={color} strokeDasharray={selectedBuyer ? undefined : '6 5'} strokeWidth={selectedBuyer ? 2.5 : 1.5} onPointerDown={e => onObject?.(e, o)} onClick={e => buyer && onObject?.(e, o)}/>)}
+    {['stage', 'obstacle', 'entrance', 'seat'].includes(o.type) && <rect x={-o.w/2} y={-o.h/2} width={o.w} height={o.h} rx={o.type === 'seat' ? Math.min(o.w, o.h) / 2 : o.type === 'stage' ? 14 : o.type === 'obstacle' ? 16 : 10} fill={o.type === 'seat' ? color : o.type === 'stage' ? 'var(--ticket-accent-soft)' : o.type === 'entrance' ? 'color-mix(in srgb, var(--ticket-accent) 8%, transparent)' : o.color} fillOpacity={o.type === 'obstacle' ? .4 : 1} stroke={o.type === 'stage' ? 'color-mix(in srgb, var(--ticket-accent) 30%, transparent)' : o.type === 'entrance' ? 'var(--ticket-accent)' : o.type === 'obstacle' ? o.color : 'none'} strokeWidth={o.type === 'entrance' ? 2 : 1.5} strokeDasharray={o.type === 'entrance' ? '4 5' : undefined} onPointerDown={e => onObject?.(e, o)} onClick={e => buyer && onObject?.(e, o)}/>}
+    {seats.map(seat => <g key={seat.id} transform={`translate(${seat.x} ${seat.y})`} data-seat-id={seat.id} className={buyer && basket[seat.id] ? 'seat-picked' : undefined} role={!mini && !preview && !decorative && (!pricing || !seat.disabled) && (!buyer || !whole) ? 'button' : undefined} tabIndex={!mini && !preview && !decorative && (!pricing || !seat.disabled) && (!buyer || !whole) ? 0 : undefined} aria-label={`${o.name}${seat.rowNumber ? `, ряд ${seat.rowNumber}` : ''}, место ${seat.number}`} aria-disabled={buyer && (!sellable(hall, o, seat) || whole) || undefined} onPointerDown={e => !buyer ? onSeat?.(e, o, seat) : onObject?.(e, o)} onClick={e => buyer && (whole ? onObject?.(e, o) : onSeat?.(e, o, seat))} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSeat?.(e, o, seat); } }}>
+      <g className="chair-facing" transform={`rotate(${seat.facing??(o.type==='rows'?180:0)})`}><rect x={-CHAIR/2} y={-CHAIR/2} width={CHAIR} height={CHAIR} rx={CHAIR/2} fill={paint(seat)} stroke={unpricedIds.has(seat.id) ? 'var(--ticket-warning)' : selectedSeat === seat.id ? 'var(--ticket-accent)' : seat.disabled ? 'var(--ticket-dim)' : textOn(paint(seat))==='#151C27' ? 'var(--ticket-border)' : 'none'} strokeWidth="3"/>
+      {!mini && <path d={`M${-CHAIR*.32} ${-CHAIR*.36}Q0 ${-CHAIR*.5} ${CHAIR*.32} ${-CHAIR*.36}`} fill="none" stroke={whole ? 'var(--ticket-dim)' : '#ffffff70'} strokeWidth="1" strokeLinecap="round"/>}</g>
+      {!mini && buyer && !whole && (basket[seat.id] || selectedBuyer) ? <path className="seat-check" d="M-4.5 0l3 3 6-6" fill="none" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" pointerEvents="none"/>
+        : !mini && <text y="3" textAnchor="middle" fontSize="8" fontWeight="600" fill={whole && !selectedBuyer ? 'var(--ticket-muted)' : textOn(paint(seat))} pointerEvents="none">{seat.number}</text>}
+    </g>)}
+    {o.type === 'rows' && !mini && <>
+      <text x={-o.w/2 + 10} y={-o.h/2 - 13} className="block-label" pointerEvents="none">{o.name}<tspan dx="9" fill="var(--ticket-muted)" fontWeight="400">{o.seats.length} мест</tspan></text>
+      {o.rows.map((row, index) => <g key={row.id} role={preview||decorative?undefined:'button'} tabIndex={buyer||preview||decorative ? -1 : 0} aria-label={`Выбрать ряд ${o.firstRow + index}`} onPointerDown={e => onRow?.(e, o, row)} onKeyDown={e => e.key === 'Enter' && onRow?.(e, o, row)}><rect x={-o.w/2-24} y={(index-(o.rows.length-1)/2)*o.rowPitch-12} width="22" height="24" fill={selectedRow === row.id ? 'var(--ticket-accent-soft)' : 'transparent'} rx="5"/><text x={-o.w/2-12} y={(index-(o.rows.length-1)/2)*o.rowPitch+4} textAnchor="middle" fill="var(--ticket-dim)" fontSize="11">{o.firstRow+index}</text></g>)}
+    </>}
+    {!mini && tableType(o) && <text textAnchor="middle" y="4" fontSize="12" fontWeight="600" fill={whole ? textOn(selectedBuyer?'var(--ticket-primary)':color) : 'var(--ticket-muted)'} pointerEvents="none">{o.name}</text>}
+    {!mini && ['standing', 'stage', 'obstacle', 'entrance'].includes(o.type) && <text textAnchor="middle" y={o.type === 'standing' ? -8 : 4} fontSize={o.type === 'stage' ? 14 : 15} letterSpacing={o.type === 'stage' ? '3' : '0'} fontWeight="600" fill={o.type === 'stage' || o.type === 'entrance' ? 'var(--ticket-accent)' : o.type === 'standing' ? color : 'var(--ticket-text)'} pointerEvents="none">{o.type === 'entrance' ? `${o.entranceType === 'out' ? '←' : o.entranceType === 'both' ? '↔' : '→'} ` : ''}{o.name}</text>}
+    {!mini && o.type === 'standing' && <text textAnchor="middle" y="17" fontSize="12" fill={color} pointerEvents="none">{o.capacity == null ? 'Укажите вместимость' : `${o.capacity} входных билетов`}</text>}
+    {!mini && unpricedIds.has(o.id) && <rect className="unpriced-outline" x={b.x-5} y={b.y-5} width={b.w+10} height={b.h+10} rx="12" fill="none" stroke="var(--ticket-warning)" strokeWidth="3" strokeDasharray="7 4" pointerEvents="none"/>}
+    {selected && !buyer && !mini && <>
+      <rect className="selection-box" x={b.x-9} y={b.y-9} width={b.w+18} height={b.h+18} rx="9" fill="none" stroke="var(--ticket-accent)" strokeWidth="2" pointerEvents="none"/>
+      {editing && !o.pinned && <><line x1="0" y1={b.y-9} x2="0" y2={b.y-38} stroke="var(--ticket-accent)"/><g data-handle="rotate" aria-label="Повернуть объект" transform={`translate(0 ${b.y-38})`} onPointerDown={e => onHandle?.(e, o, 'rotate')}><title>Перетащите, чтобы повернуть объект</title><circle r="14" fill="var(--ticket-surface)" stroke="var(--ticket-accent)" strokeWidth="1.5"/><g pointerEvents="none" color="var(--ticket-accent)"><Icon name="rotate" size={18} x={-9} y={-9}/></g></g>{[[b.x-9,b.y-9],[b.x+b.w+9,b.y-9],[b.x+b.w+9,b.y+b.h+9],[b.x-9,b.y+b.h+9]].map(([x,y],i)=><rect key={i} data-handle="resize" x={x-4} y={y-4} width="8" height="8" rx="2" fill="white" stroke="var(--ticket-accent)" strokeWidth="1.5" onPointerDown={e=>onHandle?.(e,o,'resize')}/>)}</>}
+      {o.pinned && <text x={b.x} y={b.y-15} fontSize="12" fill="var(--ticket-accent)">Закреплено</text>}
+      {o.type === 'standing' && o.points && detail === 'shape' && o.points.map((p,i)=><circle key={i} data-vertex={i} cx={p.x*o.w} cy={p.y*o.h} r="6" fill="white" stroke="var(--ticket-accent)" strokeWidth="2" onPointerDown={e=>onVertex?.(e,o,i)} onContextMenu={e=>{e.preventDefault();onVertex?.(e,o,`remove:${i}`);}}/>)}
+    </>}
+  </g>;
+}
+function MiniHall({ hall }) { return <svg viewBox={`-40 -40 ${hall.room.w+80} ${hall.room.h+80}`} aria-label={`Схема: ${hall.name}`}><rect width={hall.room.w} height={hall.room.h} rx="12" fill="#fff" stroke="var(--ticket-raised)" strokeWidth="3"/>{hall.objects.map(o=><Shape key={o.id} o={o} hall={hall} mini/>)}</svg>; }
+function Stats({ hall, small = false }) { const s = summary(hall); return <div className={`stats ${small ? 'small' : ''}`}><span><Icon name="seat" size={16}/><b>{s.individual}</b> мест</span><span><Icon name="round" size={16}/><b>{s.wholeTables}</b> столов целиком</span><span><Icon name="standing" size={16}/><b>{s.standing}</b> входных билетов</span></div>; }
+
+export function HallBuilder({ host }) {
+  let storage;try{storage = typeof window === 'undefined' ? {getItem:()=>null,setItem:()=>{}} : window.localStorage;}catch{storage={getItem:()=>null,setItem:()=>{}};}
+  const KEY=host.recoveryKey, FRAG=host.fragmentStorageKey??`${KEY}:fragments`, initial=host.initialHall;
+
+  const [hall, setHall] = useState(() => withNaturalTableSpacing(initial));
+  const hallRef = useRef(hall); hallRef.current = hall;
+  const [library, setLibrary] = useState(() => host.library??[]);
+  const [fragments, setFragments] = useState(() => readStored(storage, FRAG, []));
+  const [screen, setScreen] = useState(host.startInEditor||initial.objects.length?'editor':'start');
+  const [step, setStep] = useState(0), [selection, setSelection] = useState([]), [seatId,setSeatId] = useState(null), [rowId,setRowId] = useState(null), [detail,setDetail] = useState('object');
+  const [finishing,setFinishing]=useState(false);
+  const saving=!!host.busy||finishing,editingBlocked=host.readOnly||saving;
+  const [saleModeFocus,setSaleModeFocus]=useState(null);
+  const [priceProposal,setPriceProposal]=useState(null), [toastUndoRevision,setToastUndoRevision]=useState(null);
+  const [modal,setModal] = useState(null), [toast,setToast] = useState(''), [toastKind,setToastKind]=useState('success'), [saveStatus,setSaveStatus] = useState('Сохранено');
+  const [brush,setBrush] = useState(null), [basket,setBasket] = useState({}), [tool,setTool] = useState('select'), [draw,setDraw] = useState(null), [guide,setGuide] = useState(null), [view,setView] = useState(()=>roomView(hall));
+  const [inspector,setInspector] = useState(true), [snap,setSnap] = useState(true), [,setRevisionTick] = useState(0);
+  const [missingFocus,setMissingFocus]=useState(false), [missingObjectId,setMissingObjectId]=useState(null), [frameRequest,setFrameRequest]=useState(null);
+  const history = useRef({past:[],future:[]}), clipboard=useRef([]), drawRowsDefaults=useRef({}), gesture=useRef(null), svg=useRef(null), inspectorContent=useRef(null), upload=useRef(null), toastTimer=useRef(null);
+  const selected = hall.objects.find(o=>o.id===selection[0]), selectedSeat=selected?.seats?.find(s=>s.id===seatId), selectedRow=selected?.rows?.find(r=>r.id===rowId);
+  const stats=summary(hall), checks=issues(hall), [query,setQuery] = useState(''), [showArchived,setShowArchived]=useState(false), [librarySort,setLibrarySort]=useState('recent'), [libraryPage,setLibraryPage]=useState(0);
+  const priceSelection=selectionPricing(hall,selection,{seatId,rowId});
+  const selectedPriceUnits=Object.keys(priceSelection.counts).filter(unit=>priceSelection.counts[unit]>0);
+  const preferredPriceUnit=selectedPriceUnits.length===1?selectedPriceUnits[0]:'seat';
+  const missingItems=unpricedInventory(hall), missingObjects=unpricedObjects(hall), missingIndex=missingObjects.findIndex(m=>m.object.id===missingObjectId), unpricedIds=new Set(missingFocus&&step===1?missingItems.map(i=>i.id):[]);
+  const notify = useCallback((text,undoRevision=null,kind='success')=>{setToastKind(kind);setToastUndoRevision(undoRevision);setToast(text);clearTimeout(toastTimer.current);toastTimer.current=setTimeout(()=>setToast(''),4200);},[]);
+  const save = useCallback(async value=>{
+    try { await host.save(value);setSaveStatus(host.savedLabel??'Сохранено');return true; }
+    catch(error){setSaveStatus('Не сохранено');notify(error.message||'Не удалось сохранить схему',null,'error');return false;}
+  },[host.save,notify]);
+  useEffect(()=>setLibrary(host.library??[]),[host.library]);
+  useEffect(()=>{if(gesture.current)return;setSaveStatus('Сохраняем…');const t=setTimeout(()=>save(hall),550);return()=>clearTimeout(t);},[hall,save]);
+  useEffect(()=>{const flush=e=>{if(host.hasUnsavedChanges()){e?.preventDefault();}};window.addEventListener('beforeunload',flush);window.addEventListener('pagehide',flush);return()=>{window.removeEventListener('beforeunload',flush);window.removeEventListener('pagehide',flush);};},[save,host.hasUnsavedChanges]);
+  useEffect(()=>{try{storage.setItem(FRAG,JSON.stringify(fragments));}catch{notify('Не удалось сохранить блок');}},[fragments,notify]);
+  useEffect(()=>{setBasket({});},[hall,step]);
+  useEffect(()=>{if(inspectorContent.current&&!saleModeFocus)inspectorContent.current.scrollTop=0;},[seatId,rowId,selection[0]]);
+  useEffect(()=>{if(missingFocus)setMissingObjectId(selection[0]??null);},[selection[0],missingFocus]);
+  useEffect(()=>{if(brush&&!hall.categories.some(c=>c.id===brush))setBrush(null);},[brush,hall.categories]);
+  useEffect(()=>()=>clearTimeout(toastTimer.current),[]);
+  useEffect(()=>{if(modal){setToast('');setToastUndoRevision(null);}},[modal]);
+  useEffect(()=>{
+    if(priceProposal && (priceProposal.hall!==hall || step!==1 || modal || priceProposal.selection.join(',')!==selection.join(',') || priceProposal.seatId!==seatId || priceProposal.rowId!==rowId))setPriceProposal(null);
+  },[hall,step,modal,selection,seatId,rowId,priceProposal]);
+  useEffect(()=>{
+    if(!saleModeFocus)return;
+    const object=hall.objects.find(o=>o.id===saleModeFocus.objectId);
+    if(step!==0||selection.length!==1||selection[0]!==saleModeFocus.objectId||seatId||rowId||!object||object.saleMode!==saleModeFocus.saleMode)setSaleModeFocus(null);
+  },[step,selection,seatId,rowId,hall,saleModeFocus]);
+  useLayoutEffect(()=>{
+    if(!frameRequest)return;
+    const rect=svg.current?.getBoundingClientRect(), objects=hallRef.current.objects.filter(o=>frameRequest.includes(o.id));
+    // Frame after the inspector changes size, leaving room for floating canvas controls.
+    const inset=rect?.height?Math.min(missingFocus&&step===1?96:40,rect.height*.3):0;
+    const next=frameObjects(objects,rect?.width&&rect?.height?rect.width/(rect.height-inset):1.4);
+    if(next){const padding=rect?.width?inset*next.w/rect.width:0;setView({...next,y:next.y-padding,h:next.h+padding});}
+  },[frameRequest]);
+  function commit(next, before=hallRef.current) {
+    if(editingBlocked){notify(saving?'Дождитесь окончания сохранения':'Схема доступна только для просмотра');return false;}
+    try{next=constrainHallToRoom(next,before);}catch(error){notify(error.message);setHall(before);return false;}
+    next=deduplicateCategories(next);
+    if(JSON.stringify(next)===JSON.stringify(before))return true;
+    if(gesture.current?.kind==='slider'){setHall(next);return true;}
+    const seats=next.objects.reduce((n,o)=>n+(o.seats?.length??0)+(o.type==='seat'?1:0),0), rows=next.objects.reduce((n,o)=>n+(o.rows?.length??0),0), tables=next.objects.filter(tableType).length;
+    if(next.categories.length>100||seats>2000||seats+rows+next.objects.length>3000||rows>100||tables>500){notify('Лимит схемы: 2 000 мест, 100 рядов, 500 столов и 100 категорий');setHall(before);return false;}
+    history.current.past.push(clone(before));if(history.current.past.length>150)history.current.past.shift();history.current.future=[];
+    next={...next,revision:before.revision+1};host.onChange(next);setHall(next);setRevisionTick(n=>n+1);return true;
+  }
+  function undo(redo=false){
+    if(editingBlocked)return;
+    const from=redo?history.current.future:history.current.past,to=redo?history.current.past:history.current.future;
+    if(!from.length)return;
+    let restored={...from.at(-1),revision:hallRef.current.revision+1};
+    try{restored=constrainHallToRoom(restored,hallRef.current);}catch(error){notify(error.message);return;}
+    to.push(clone(hallRef.current));from.pop();host.onChange(restored);setHall(restored);setRevisionTick(n=>n+1);setSeatId(null);setRowId(null);
+  }
+  function patch(p, ids=selection){try{commit({...hallRef.current,objects:hallRef.current.objects.map(o=>ids.includes(o.id)?updateObject(o,p):o)});}catch(error){notify(error.message);}}
+  function patchSeat(p){if(!selectedSeat)return;commit({...hall,objects:hall.objects.map(o=>o.id===selected.id?{...o,seats:o.seats.map(s=>s.id===seatId?{...s,...p}:s)}:o)});}
+  function patchRow(p){if(!selectedRow)return;commit({...hall,objects:hall.objects.map(o=>o.id===selected.id?reconcile({...o,rows:o.rows.map(r=>r.id===rowId?{...r,...p}:r)}):o)});}
+  function openObjectSettings(){
+    if(selection.length===1&&tableType(selected)){setModal({kind:'edit-table',title:`Изменить: ${selected.name}`});return;}
+    if(selection.length===1&&selected.type==='rows'){setModal({kind:'edit-rows',title:`Изменить: ${selected.name}`});return;}
+    setModal({kind:'object-settings',title:selection.length>1?'Настройки выделения':`Настройки: ${selected.name}`});
+  }
+  function saveObjectEdit(object){
+    if(commit({...hallRef.current,objects:hallRef.current.objects.map(o=>o.id===object.id?object:o)})){setSeatId(null);setRowId(null);setModal(null);}
+  }
+  function selectObject(id,add=false){setSelection(prev=>add?prev.includes(id)?prev.filter(v=>v!==id):[...prev,id]:[id]);setSeatId(null);setRowId(null);setDetail('object');setInspector(true);}
+  function deleteSelected(){if(rowId&&selectedRow){if(selected.rows.length<=1){notify('Оставьте один ряд или удалите весь блок');return;}commit({...hall,objects:hall.objects.map(o=>o.id===selected.id?reconcile({...o,rowCount:o.rowCount-1,rows:o.rows.filter(r=>r.id!==rowId),seats:o.seats.filter(s=>s.rowId!==rowId)}):o)});setRowId(null);return;}if(seatId&&((selected.type==='rows'&&selected.rows.find(r=>r.id===selectedSeat.rowId)?.count<=1)||(tableType(selected)&&selected.count<=1))){notify('Оставьте хотя бы одно место или удалите весь объект');return;}if(seatId){commit({...hall,objects:hall.objects.map(o=>{if(o.id!==selected.id)return o;if(o.type==='rows'){const r=o.rows.find(r=>r.id===selectedSeat.rowId);return reconcile({...o,rows:o.rows.map(v=>v.id===r.id?{...v,count:Math.max(1,v.count-1)}:v),seats:o.seats.filter(s=>s.id!==seatId)});}if(o.type==='rect'&&o.arrangement==='custom'){const side=seatPositions(o).find(s=>s.id===seatId)?.side;const sides=[...o.sides];if(side!=null)sides[side]--;return updateObject(o,{sides,seats:o.seats.filter(s=>s.id!==seatId)});}return reconcile({...o,count:Math.max(1,o.count-1),seats:o.seats.filter(s=>s.id!==seatId)});})});setSeatId(null);return;}
+    const run=()=>{commit({...hall,objects:hall.objects.filter(o=>!selection.includes(o.id))});setSelection([]);};
+    if(selection.length>1)setModal({kind:'confirm',title:'Удалить выбранные объекты?',text:'Столы и блоки будут удалены вместе с креслами. Действие можно отменить.',action:run});else run();
+  }
+  function duplicate(source=hall.objects.filter(o=>selection.includes(o.id)),confirmed=false){if(!confirmed&&source.some(o=>o.type==='standing')){const capacity=source.filter(o=>o.type==='standing').reduce((n,o)=>n+(o.capacity||0),0);setModal({kind:'confirm',title:'Создать независимую копию зоны?',text:`Копия добавит ещё ${capacity} входных билетов. Это отдельная квота, не общий пул.`,action:()=>duplicate(source,true)});return;}const copies=copyObjects(source,hall);if(!commit({...hall,objects:[...hall.objects,...copies]}))return;setSelection(copies.map(o=>o.id));setSeatId(null);setRowId(null);notify('Копия добавлена. Расположение можно изменить.');}
+  function fit(){setView(roomView(hall));}
+  function zoom(factor){setView(v=>{const w=clamp(v.w*factor,220,hall.room.w*3),h=w*v.h/v.w;return{x:v.x+(v.w-w)/2,y:v.y+(v.h-h)/2,w,h};});}
+  function cancelPricing(restoreFocus=false){
+    const trigger=priceProposal?.trigger;setPriceProposal(null);
+    if(restoreFocus&&trigger?.isConnected)trigger.focus({preventScroll:true});
+  }
+  function proposePricing(id,ids=selection,scope={seatId,rowId},event){
+    setPriceProposal(null);
+    if(editingBlocked||!id)return;
+    const report=selectionPricing(hallRef.current,ids,{...scope,categoryId:id});
+    const mismatch=tableSaleMismatch(hallRef.current,ids,id,scope);
+    if(!report.canApply&&!mismatch){
+      if(report.quantity&&report.matching===report.quantity&&!report.incompatible)notify('Эта категория уже назначена выбранному.');
+      else if(report.incompatible&&report.quantity)notify('Выберите категорию с подходящей единицей продажи.');
+      else if(report.quantity&&category(hallRef.current,id)?.active===false)notify('Категория выключена. Включите её перед назначением.');
+      return;
+    }
+    const trigger=event?.target?.closest?.('button,select,[role="button"]')??null;
+    const clickedShape=event?.target?.closest?.('.canvas-object');
+    const nodes=Array.from(svg.current?.querySelectorAll('[data-object-id]')??[]).filter(n=>ids.includes(n.dataset.objectId));
+    const target=scope.seatId?Array.from(svg.current?.querySelectorAll('[data-seat-id]')??[]).find(n=>n.dataset.seatId===scope.seatId):null;
+    const boxes=(target?[target]:nodes).map(n=>n.getBoundingClientRect());
+    const point=clickedShape&&event.type!=='keydown'?{x:event.clientX,y:event.clientY}:boxes.length?{x:Math.max(...boxes.map(b=>b.right)),y:Math.min(...boxes.map(b=>b.top))}: {x:window.innerWidth/2,y:window.innerHeight/2};
+    setPriceProposal({hall:hallRef.current,mismatch,categoryId:id,selection:[...ids],seatId:scope.seatId??null,rowId:scope.rowId??null,point,trigger});
+  }
+  function selectPricing(ids,scope={},event){
+    ids=ids.filter(id=>hall.objects.some(object=>object.id===id&&canPriceObject(object)));
+    if(!ids.length)return;
+    const nextScope={seatId:scope.seatId??null,rowId:scope.rowId??null};
+    setSelection(ids);setSeatId(nextScope.seatId);setRowId(nextScope.rowId);setInspector(true);
+    setDetail(nextScope.seatId?'seats':nextScope.rowId?'rows':'object');
+    proposePricing(brush,ids,nextScope,event);
+  }
+  function choosePriceCategory(id,event){setBrush(id);proposePricing(id,selection,{seatId,rowId},event);}
+  function openSaleModeSettings(){
+    const object=hallRef.current.objects.find(o=>o.id===priceProposal?.mismatch?.objectId);
+    if(!object||!tableType(object)||editingBlocked)return;
+    setPriceProposal(null);setToast('');setStep(0);setTool('select');setSelection([object.id]);
+    setSeatId(null);setRowId(null);setDetail('object');setInspector(true);
+    setSaleModeFocus({objectId:object.id,saleMode:object.saleMode});setModal({kind:'edit-table',title:`Изменить: ${object.name}`});
+  }
+  function applyPricing(){
+    const proposal=priceProposal;
+    if(!proposal||proposal.hall!==hallRef.current)return cancelPricing();
+    const next=assignCategory(hallRef.current,proposal.selection,proposal.categoryId,proposal);
+    if(next===hallRef.current)return cancelPricing();
+    const report=selectionPricing(hallRef.current,proposal.selection,proposal),cat=category(hallRef.current,proposal.categoryId);
+    if(commit(next)){cancelPricing(true);notify(`«${cat.name}» назначена: ${inventoryLabel(report.counts)}`,next.revision+1);}
+  }
+  function frame(objects){setFrameRequest(objects.map(o=>o.id));}
+  function revealObject(id){if(step===1){selectPricing([id]);return;}selectObject(id);frame(hall.objects.filter(o=>o.id===id));}
+  function showMissing(){setStep(1);setTool('select');setMissingFocus(true);setMissingObjectId(null);setSelection([]);setSeatId(null);setRowId(null);setDetail('object');frame(missingObjects.map(m=>m.object));if(window.matchMedia('(max-width:600px)').matches)setInspector(false);}
+  function jumpMissing(index){if(!missingObjects.length)return;const i=(index+missingObjects.length)%missingObjects.length;setMissingFocus(true);const item=missingObjects[i];setMissingObjectId(item.object.id);selectObject(item.object.id);frame([item.object]);}
+  function pricingScope(scope,id,event){
+    if(scope==='seats'){setPriceProposal(null);setSeatId(null);setRowId(null);setDetail('seats');return;}
+    selectPricing(selection,scope==='seat'?{seatId:id}:scope==='row'||scope==='rows'?{rowId:scope==='rows'?selected.rows[0].id:id}:{},event);
+  }
+  function useHall(source){let next=copyHall(deduplicateCategories(source));if(next.currency!==hall.currency){next.currency=hall.currency;next.categories=next.categories.map(c=>({...c,price:null}));notify('Валюта отличается: проверьте и назначьте цены');}if(!commit({...next,id:hall.id,currency:hall.currency}))return;setScreen('editor');setStep(0);setMissingFocus(false);setMissingObjectId(null);setSelection([]);setSeatId(null);setModal(null);setView(roomView(next));}
+  function chooseHall(source){if(screen==='editor')setModal({kind:'confirm',title:'Заменить текущую схему?',text:'Будет создана независимая копия выбранного зала. Текущую схему можно восстановить через «Отменить».',action:()=>useHall(source)});else useHall(source);}
+  function changeRoom(patch){const room={...hall.room,...patch};if(!commit({...hall,room}))return false;setView({x:-60,y:-45,w:room.w+120,h:room.h+90});return true;}
+  function changeStep(next){
+    setStep(next);setTool('select');setSeatId(null);setRowId(null);setDetail('object');setPriceProposal(null);
+    if(next!==0)setSelection(previous=>previous.filter(id=>hall.objects.some(object=>object.id===id&&canPriceObject(object))));
+  }
+  async function nextStep(){
+    if(finishing||host.busy)return;
+    if(!host.finishLabel&&step<2){changeStep(step+1);return;}
+    if(!host.finishLabel&&checks.length){notify('Исправьте замечания перед завершением');return;}
+    setFinishing(true);
+    try{if(await save(hall))await host.onFinish();}catch(error){notify(error.message||'Не удалось сохранить зал',null,'error');}finally{setFinishing(false);}
+  }
+
+  function exportJSON(){const blob=new Blob([JSON.stringify(hall,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='ticket-hall.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);notify('Схема экспортирована');}
+  async function importJSON(file){if(!file)return;try{if(file.size>3_000_000)throw new Error('Файл слишком большой');const data=validateImport(JSON.parse(await file.text()));chooseHall(data);}catch(e){notify(e.message||'Не удалось открыть файл');}if(upload.current)upload.current.value='';}
+  function availableSpot(object){const candidate={...object};const all=hall.objects.map(worldBounds);for(let y=220;y<hall.room.h-60;y+=60)for(let x=130;x<hall.room.w-60;x+=60){candidate.x=x;candidate.y=y;const b=worldBounds(candidate);if(b.left<20||b.top<20||b.right>hall.room.w-20||b.bottom>hall.room.h-20)continue;if(!all.some(a=>a.left<b.right+12&&a.right>b.left-12&&a.top<b.bottom+12&&a.bottom>b.top-12))return{x,y};}return{x:hall.room.w/2,y:hall.room.h/2};}
+  function addObjects(objects){
+    let categories=hall.categories;
+    const inventory=o=>['rows','round','rect','standing','seat'].includes(o.type),first=objects.find(inventory);
+    if(first&&!hall.objects.some(inventory)&&categories.length===1&&categories[0].name==='Стандарт'&&categories[0].price===null&&categories[0].unit==='seat')categories=[{...categories[0],unit:unitOf(first)}];
+    if(!commit({...hall,categories,objects:[...hall.objects,...objects]}))return;setSelection(objects.map(o=>o.id));setSeatId(null);setRowId(null);setInspector(true);setModal(null);setTool('select');setDetail('object');
+  }
+  function objectDown(e,o){
+    if(step===1){
+      if(tool==='pan'||!canPriceObject(o))return;e.preventDefault();e.stopPropagation();
+      if(e.shiftKey){setPriceProposal(null);selectObject(o.id,true);return;}
+      selectPricing(selection.includes(o.id)&&!seatId&&!rowId?selection:[o.id],{},e);return;
+    }
+    if(e.type==='keydown'&&step!==2){e.stopPropagation();selectObject(o.id,e.shiftKey);return;}if(step===2&&e.type!=='click'&&e.type!=='keydown')return;if(step===2||!e.nativeEvent||e.type==='click') {if(step===2&&sellable(hall,o)){setInspector(true);if(tableType(o)&&o.saleMode==='whole_table'){if(category(hall,o.categoryId)?.price==null)return;setBasket(b=>({...b,[o.id]:b[o.id]?0:1}));}else if(o.type==='standing'&&o.capacity>0&&category(hall,o.categoryId)?.price!=null)setBasket(b=>({...b,[o.id]:b[o.id]?0:1}));else if(o.type==='seat'&&category(hall,o.categoryId)?.price!=null)setBasket(b=>({...b,[o.id]:b[o.id]?0:1}));}return;}
+    if(tool==='pan'||tool.startsWith('draw-')||tool==='ruler')return;e.stopPropagation();if(e.shiftKey){selectObject(o.id,true);return;}if(!selection.includes(o.id))selectObject(o.id);
+    if(step===1){if(seatId||rowId)selectObject(o.id);return;}
+    if(editingBlocked)return;
+    if(o.pinned){notify('Объект закреплён. Открепите его в настройках объекта.');return;}
+    const p=getPoint(svg.current,e);gesture.current={kind:'move',start:p,before:clone(hall),ids:selection.includes(o.id)?selection:[o.id]};svg.current.setPointerCapture(e.pointerId);
+  }
+  function seatDown(e,o,s){if(step===1&&(!canPriceObject(o)||s.disabled))return;if(e.shiftKey&&step!==2){objectDown(e,o);return;}if(step===1&&tableType(o)&&o.saleMode==='whole_table'){objectDown(e,o);return;}if(step===2){if(!sellable(hall,o,s)||o.saleMode==='whole_table'||resolvedCategory(hall,o,s,s.row)?.price==null)return;setInspector(true);setBasket(b=>({...b,[s.id]:b[s.id]?0:1}));return;}
+    if(tool==='pan')return;e.stopPropagation();if(step===1){e.preventDefault();selectPricing([o.id],{seatId:s.id},e);return;}setSelection([o.id]);setSeatId(s.id);setRowId(null);setInspector(true);
+    if(editingBlocked||step===1||o.pinned||e.type==='keydown')return;
+    const p=getPoint(svg.current,e);gesture.current={kind:'seat',start:p,before:clone(hall),objectId:o.id,seatId:s.id,seat:s};svg.current.setPointerCapture(e.pointerId);
+  }
+  function rowDown(e,o,row){if(step===1&&!canPriceObject(o))return;if(tool==='pan')return;e.stopPropagation();if(step===2)return;if(step===1){e.preventDefault();selectPricing([o.id],{rowId:row.id},e);return;}setSelection([o.id]);setRowId(row.id);setSeatId(null);setDetail('rows');setInspector(true);}
+  function handleDown(e,o,kind){e.stopPropagation();if(editingBlocked||step!==0||o.pinned)return;gesture.current={kind,start:getPoint(svg.current,e),before:clone(hall),objectId:o.id};svg.current.setPointerCapture(e.pointerId);}
+  function vertexDown(e,o,index){e.stopPropagation();if(editingBlocked||step!==0)return;if(index==='add'){if(o.points.length>=100){notify('Лимит: 100 точек формы');return;}const p=getPoint(svg.current,e),local=rotate(p.x-o.x,p.y-o.y,-o.rotation);patch({points:[...o.points,{x:clamp(local.x/o.w,-.5,.5),y:clamp(local.y/o.h,-.5,.5)}]},[o.id]);return;}
+    if(typeof index==='string'){if(o.points.length<=3){notify('В форме должно быть хотя бы три точки');return;}patch({points:o.points.filter((_,i)=>i!==Number(index.split(':')[1]))},[o.id]);return;}
+    gesture.current={kind:'vertex',start:getPoint(svg.current,e),before:clone(hall),objectId:o.id,index};svg.current.setPointerCapture(e.pointerId);
+  }
+  function canvasDown(e){if(e.button!==0&&e.button!==1)return;const p=getPoint(svg.current,e);if(tool==='pan'||e.button===1){gesture.current={kind:'pan',client:{x:e.clientX,y:e.clientY},view:{...view}};svg.current.setPointerCapture(e.pointerId);return;}
+    if(step!==0){if(e.target===e.currentTarget||e.target.dataset.floor){setPriceProposal(null);setSelection([]);setSeatId(null);setRowId(null);}return;}
+    if(editingBlocked&&tool.startsWith('draw-'))return;
+    if(['draw-rows','draw-standing','ruler'].includes(tool)){const start=tool.startsWith('draw-')?{x:clamp(p.x,0,hall.room.w),y:clamp(p.y,0,hall.room.h)}:p;gesture.current={kind:tool,start,before:clone(hall)};setDraw({x:start.x,y:start.y,w:0,h:0});svg.current.setPointerCapture(e.pointerId);}
+    else {setSeatId(null);setRowId(null);if(!e.shiftKey)setSelection([]);gesture.current={kind:'marquee',start:p,before:clone(hall)};svg.current.setPointerCapture(e.pointerId);}
+  }
+  function canvasMove(e){const g=gesture.current;if(!g)return;if(g.kind==='pan'){const rect=svg.current.getBoundingClientRect();setView({...g.view,x:g.view.x-(e.clientX-g.client.x)*g.view.w/rect.width,y:g.view.y-(e.clientY-g.client.y)*g.view.h/rect.height});return;}
+    const p=getPoint(svg.current,e),dx=p.x-g.start.x,dy=p.y-g.start.y;
+    if(g.kind==='seat'&&!g.dragged){if(Math.hypot(dx,dy)<3)return;g.dragged=true;}
+    if(g.kind.startsWith('draw-')||g.kind==='marquee'||g.kind==='ruler'){const end=g.kind.startsWith('draw-')?{x:clamp(p.x,0,hall.room.w),y:clamp(p.y,0,hall.room.h)}:p;setDraw({x:Math.min(end.x,g.start.x),y:Math.min(end.y,g.start.y),w:Math.abs(end.x-g.start.x),h:Math.abs(end.y-g.start.y)});return;}
+    const snapN=n=>snap&&!e.altKey?Math.round(n/5)*5:n;
+    let next=clone(g.before);
+    if(g.kind==='move'){const anchor=g.before.objects.find(o=>g.ids.includes(o.id)&&!o.pinned),moveX=anchor?snapN(anchor.x+dx)-anchor.x:dx,moveY=anchor?snapN(anchor.y+dy)-anchor.y:dy;next.objects=next.objects.map(o=>{if(!g.ids.includes(o.id)||o.pinned)return o;const moved={...o,x:o.x+moveX,y:o.y+moveY};if(g.ids.length===1&&o.type==='entrance'&&snap&&!e.altKey){const candidates=[{d:Math.abs(moved.y),x:moved.x,y:o.h/2,rotation:0},{d:Math.abs(hall.room.h-moved.y),x:moved.x,y:hall.room.h-o.h/2,rotation:0},{d:Math.abs(moved.x),x:o.h/2,y:moved.y,rotation:90},{d:Math.abs(hall.room.w-moved.x),x:hall.room.w-o.h/2,y:moved.y,rotation:90}].sort((a,b)=>a.d-b.d);if(candidates[0].d<50)Object.assign(moved,candidates[0]);}return moved;});setGuide({x:snapN(p.x),y:snapN(p.y)});}
+    else {next.objects=next.objects.map(o=>{if(o.id!==g.objectId)return o;if(g.kind==='rotate')return{...o,rotation:normalizeAngle(Math.round((Math.atan2(p.y-o.y,p.x-o.x)*180/Math.PI+90)/5)*5)};
+      const local=rotate(p.x-o.x,p.y-o.y,-o.rotation);
+      if(g.kind==='resize'){const b=bounds(o),extraX=b.w-o.w,extraY=b.h-o.h;const resized=resizeObject(o,Math.max(20,2*Math.abs(local.x)-extraX-18),Math.max(20,2*Math.abs(local.y)-extraY-18));if(!resized){setGuide({rejected:true});return o;}setGuide(null);return resized;}
+      if(g.kind==='seat')return moveSeat(o,g.seatId,local);
+      if(g.kind==='vertex')return{...o,points:o.points.map((v,i)=>i===g.index?{x:clamp(local.x/o.w,-.5,.5),y:clamp(local.y/o.h,-.5,.5)}:v)};
+      return o;
+    });}
+    try{setHall(constrainHallToRoom(next,g.before,{movingIds:g.kind==='move'?g.ids:undefined}));}catch{setGuide({rejected:true});}
+  }
+  function canvasUp(e){const g=gesture.current;if(!g)return;gesture.current=null;setGuide(null);const raw=getPoint(svg.current,e),p=g.kind.startsWith('draw-')?{x:clamp(raw.x,0,hall.room.w),y:clamp(raw.y,0,hall.room.h)}:raw,area={x:Math.min(p.x,g.start?.x??p.x),y:Math.min(p.y,g.start?.y??p.y),w:Math.abs(p.x-(g.start?.x??p.x)),h:Math.abs(p.y-(g.start?.y??p.y))};setDraw(null);
+    if(g.kind==='pan')return;
+    if(g.kind==='ruler'){notify(`Расстояние: ${(Math.hypot(area.w,area.h)/SCALE).toFixed(2)} м`);setTool('select');return;}
+    if(g.kind==='marquee'){if(area.w>8&&area.h>8)setSelection(hall.objects.filter(o=>o.x>=area.x&&o.x<=area.x+area.w&&o.y>=area.y&&o.y<=area.y+area.h).map(o=>o.id));return;}
+    if(g.kind.startsWith('draw-')){if(area.w<60||area.h<50){notify('Нарисуйте область побольше или используйте числовые настройки');return;}const x=area.x+area.w/2,y=area.y+area.h/2;if(g.kind==='draw-rows')addObjects([fitBlock(x,y,area.w,area.h,drawRowsDefaults.current)]);else if(g.kind==='draw-standing')addObjects([makeObject('standing',x,y,{w:area.w,h:area.h})]);setTool('select');return;}
+    commit(hallRef.current,g.before);
+  }
+  const cancelGesture=()=>{if(gesture.current?.before)setHall(gesture.current.before);gesture.current=null;setDraw(null);setGuide(null);};
+  useEffect(()=>{const handler=e=>{if(priceProposal||saving)return;if(e.target instanceof HTMLElement&&(e.target.isContentEditable||['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName)))return;if(modal&&(modal.kind!=='add'||['rows','round','rect'].includes(modal.type)||e.target.closest?.('.add-object-panel')||window.matchMedia('(max-width:900px)').matches))return;const mod=e.metaKey||e.ctrlKey;
+    if(mod&&e.key.toLowerCase()==='z'){e.preventDefault();undo(e.shiftKey);}else if(mod&&e.key.toLowerCase()==='y'){e.preventDefault();undo(true);}else if(mod&&e.key.toLowerCase()==='d'){e.preventDefault();duplicate();}else if(mod&&e.key.toLowerCase()==='c'){clipboard.current=clone(hall.objects.filter(o=>selection.includes(o.id)));}else if(mod&&e.key.toLowerCase()==='v'){e.preventDefault();duplicate(clipboard.current);}else if(mod&&e.key==='0'){e.preventDefault();fit();}else if(e.key==='Escape'){cancelGesture();setTool('select');setSelection([]);setSeatId(null);setRowId(null);}else if((e.key==='Delete'||e.key==='Backspace')&&step===0){e.preventDefault();deleteSelected();}else if(e.key.startsWith('Arrow')&&step===0&&selection.length){e.preventDefault();const amount=e.shiftKey?20:4;commit({...hall,objects:hall.objects.map(o=>selection.includes(o.id)&&!o.pinned?{...o,x:o.x+(e.key==='ArrowRight'?amount:e.key==='ArrowLeft'?-amount:0),y:o.y+(e.key==='ArrowDown'?amount:e.key==='ArrowUp'?-amount:0)}:o)});}};window.addEventListener('keydown',handler);return()=>window.removeEventListener('keydown',handler);});
+
+  const renderInspector=()=><Inspector highlightSaleMode={saleModeFocus?.objectId===selected.id} hall={hall} object={selected} selection={selection} selectedSeat={selectedSeat} selectedRow={selectedRow} detail={detail} setDetail={setDetail} setSeatId={setSeatId} setRowId={setRowId} patch={patch} patchSeat={patchSeat} patchRow={patchRow} commit={commit} duplicate={duplicate} remove={()=>{deleteSelected();if(modal?.kind==='object-settings'&&selection.length===1&&!seatId&&!rowId)setModal(null);}} notify={notify} setModal={setModal} fragments={fragments} setFragments={setFragments}/>;
+  const filtered=library.filter(item=>!!item.archived===showArchived&&item.hall.name.toLowerCase().includes(query.toLowerCase())).sort((a,b)=>librarySort==='name'?a.hall.name.localeCompare(b.hall.name,'ru'):b.updatedAt-a.updatedAt);
+  const pageCount=Math.max(1,Math.ceil(filtered.length/6)), currentPage=Math.min(libraryPage,pageCount-1);
+  const renderLibrary=()=> <>{host.libraryError&&<p role="alert" className="fineprint">{host.libraryError}</p>}<div className="search-row"><div className="search"><Icon name="search" size={18}/><input aria-label="Поиск сохранённого зала" placeholder="Найти зал по названию" value={query} onChange={e=>{setQuery(e.target.value);setLibraryPage(0);}}/></div><select className="library-sort" aria-label="Сортировка сохранённых залов" value={librarySort} onChange={e=>{setLibrarySort(e.target.value);setLibraryPage(0);}}><option value="recent">Сначала недавние</option><option value="name">По названию</option></select><Btn onClick={()=>{setShowArchived(!showArchived);setLibraryPage(0);}}>{showArchived?'Все залы':'Архив'}</Btn></div><div className="hall-cards">{filtered.slice(currentPage*6,currentPage*6+6).map(item=><article className="hall-card" key={item.id}><button className="hall-card-preview" aria-label={`Предпросмотр ${item.hall.name}`} onClick={()=>setModal({kind:'preview-hall',item})}><MiniHall hall={item.hall}/><span className="preview-eye"><Icon name="eye"/></span></button><div className="hall-card-copy"><div className="card-title"><h3>{item.hall.name}</h3><button className="icon-btn" aria-label={`Настройки зала ${item.hall.name}`} onClick={()=>setModal({kind:'manage-hall',item})}><Icon name="more"/></button></div><small>{summary(item.hall).guests} гостей · {item.hall.objects.filter(tableType).length} столов</small><Btn icon={showArchived?'undo':'arrow'} onClick={()=>showArchived?host.updateLibrary(item.id,{archived:false}).catch(error=>notify(error.message)):chooseHall(item.hall)}>{showArchived?'Восстановить':'Использовать зал'}</Btn></div></article>)}</div>{pageCount>1&&<div className="library-pagination"><Btn disabled={currentPage===0} onClick={()=>setLibraryPage(currentPage-1)}>Назад</Btn><span>{currentPage+1} / {pageCount}</span><Btn disabled={currentPage===pageCount-1} onClick={()=>setLibraryPage(currentPage+1)}>Далее</Btn></div>}{!filtered.length&&<div className="empty-state"><Icon name="folder" size={32}/><h3>Залов пока нет</h3><p>Создайте схему и сохраните её в свою библиотеку.</p></div>}</>;
+  return <div className="app-shell hb-app" data-step={screen==="editor"?step:undefined}>
+    <div className="hb-glow" aria-hidden="true"><i/><i/></div>
+    <header className="hb-top">
+      <div className="hb-id">
+        <button className="hb-round" disabled={saving} aria-label={host.backLabel??"Вернуться к мероприятию"} title="Вернуться к мероприятию" onClick={async()=>{if(host.readOnly||await save(hall))await host.onBack();}}><Icon name="back" size={19}/></button>
+        <span className="hb-mark" aria-hidden="true"><Icon name="ticket" size={22}/></span>
+        <div className="hb-name"><small>Конструктор зала</small><input aria-label="Название зала" maxLength={120} readOnly={editingBlocked} value={hall.name} onChange={e=>commit({...hall,name:e.target.value})}/></div>
+      </div>
+      {screen==='editor'&&<StepNav step={step} disabled={saving} onChange={changeStep}/>}
+      {screen==='editor'&&<div className="hb-actions"><button className="hb-round" aria-label="Отменить" title="Отменить · Ctrl Z" disabled={saving||!history.current.past.length} onClick={()=>undo()}><Icon name="undo" size={19}/></button><button className="hb-round" aria-label="Повторить" title="Повторить · Ctrl Shift Z" disabled={saving||!history.current.future.length} onClick={()=>undo(true)}><Icon name="redo" size={19}/></button><button className="hb-round" disabled={saving} aria-label="Меню схемы" title="Меню схемы" onClick={()=>setModal({kind:'menu'})}><Icon name="more" size={19}/></button><button type="button" className="hb-btn primary" disabled={saving} onClick={nextStep}><span>{saving?'Сохраняем…':host.finishLabel??(step===0?'Далее: цены':step===1?'Проверить':'Готово')}</span><Icon name={host.finishLabel||step===2?'check':'arrow'} size={17}/></button></div>}
+    </header>
+    {screen==='start'?<main className="start-screen"><div className="start-heading"><div><span className="eyebrow">ПРОСТРАНСТВО ДЛЯ ВАШЕГО СОБЫТИЯ</span><h1>Начнём с зала<span>.</span></h1><p>Выберите готовую схему или создайте свою — места, столы и стоячие зоны в одном пространстве.</p></div>{initial&&<Btn icon="arrow" onClick={()=>setScreen('editor')}>Продолжить черновик</Btn>}</div><section className="starter-section"><div className="section-heading"><h2>Создать новую схему</h2><span>Начните с того, что подходит вашему событию</span></div><div className="starter-cards">{[['rows','Ряды мест','Театр, лекция, концерт'],['tables','Столы с местами','Банкет, ужин, встреча'],['standing','Стоячая зона','Клуб, фестиваль, танцпол'],['mixed','Смешанный зал','Места, столы и танцпол'],['empty','Пустая схема','Всё с чистого листа']].map(([kind,title,hint])=><button key={kind} className="starter-card" onClick={()=>{useHall(starterHall(kind,hall.currency));}}><span className="starter-symbol"><Icon name={kind==='tables'?'round':kind==='mixed'?'layers':kind==='empty'?'plus':kind} size={25}/></span><b>{title}</b><small>{hint}</small><Icon name="arrow" size={17}/></button>)}</div></section><section><div className="section-heading"><h2>Мои сохранённые залы <span className="count-badge">{library.filter(v=>!v.archived).length}</span></h2><Btn icon="download" onClick={()=>upload.current.click()}>Открыть файл</Btn></div>{renderLibrary()}</section><footer className="start-footer"><Icon name="cloud" size={17}/> Изменения сохраняются в черновике мероприятия.</footer></main>:<>
+
+      {host.readOnly&&<div className="conflict" role="status">Схема доступна только для просмотра. Если она изменилась в другом окне, перезагрузите страницу. Несохранённые правки можно скачать.<Btn onClick={exportJSON}>Скачать JSON</Btn></div>}
+      {saveStatus==='Не сохранено'&&<div className="conflict" role="alert">Изменения пока только в памяти. Не закрывайте это окно.<Btn onClick={()=>save(hall)}>Повторить сохранение</Btn><Btn onClick={exportJSON}>Скачать JSON</Btn></div>}
+      <div inert={saving||undefined} aria-busy={saving||undefined} className={`hb-body ${inspector?'':'no-insp'}`}>
+        <aside className="hb-rail"><div className="hb-rail-in" key={step}>
+          {step===0?<>
+            <section className="hb-card"><h3>Добавить на схему</h3><p className="hb-group">В продаже</p>
+              <div className="hb-tools">{['rows','round','rect','standing','seat'].map(type=><button key={type} type="button" style={{'--hue':TYPE_HUE[type]}} onClick={()=>setModal({kind:'add',type})}><span className="ti"><Icon name={type} size={18}/></span>{type==='standing'?'Платная зона':type==='rect'?'Прямоуг. стол':TYPES[type]}<span className="plus"><Icon name="plus" size={16}/></span></button>)}</div>
+              <p className="hb-group">На площадке</p>
+              <div className="hb-chips">{venueFeatures.map(feature=><button key={feature.key} type="button" onClick={()=>setModal({kind:'add',type:feature.type,preset:feature,title:`Добавить: ${feature.name}`})}><Icon name={feature.icon} size={15}/>{feature.name}</button>)}</div>
+            </section>
+            <section className="hb-card hb-objects"><h3>На схеме <span className="hb-count">{hall.objects.length}</span></h3><div className="hb-objlist" role="region" aria-label="Объекты на схеме" tabIndex={0}><ObjectList hall={hall} selection={selection} onSelect={revealObject}/></div></section>
+            <section className="hb-card hb-links"><button type="button" onClick={()=>setModal({kind:'library'})}><Icon name="folder" size={17}/>Выбрать сохранённый зал</button><button type="button" onClick={()=>setModal({kind:'fragments'})}><Icon name="layers" size={17}/>Сохранённые блоки<em>{fragments.length}</em></button><button type="button" onClick={()=>setModal({kind:'save-library'})}><Icon name="save" size={17}/>Сохранить зал</button></section>
+          </>:step===1?<>
+            <section className="hb-card"><h3>Категории цен</h3><p className="hb-muted">Выберите категорию, затем нажмите на ряд, стол или место на схеме.</p>
+              <div className="hb-cats">{hall.categories.map(c=>{const mismatch=selectedPriceUnits.some(unit=>unit!==c.unit);return <div className="hb-cat-row" key={c.id} style={{'--c':c.color}}><button aria-pressed={brush===c.id} className={`hb-cat ${brush===c.id?'on':''} ${mismatch?'off':''}`} disabled={editingBlocked||c.active===false||!!(mismatch&&!tableSaleMismatch(hall,selection,c.id,{seatId,rowId}))} onClick={e=>choosePriceCategory(c.id,e)}><i/><div><b>{c.name}</b><small><strong>{money(c.price,hall.currency)}</strong> {units[c.unit]}</small>{mismatch&&<small className="hb-cat-warn">Не для выбранного</small>}{c.active===false&&<small>выключена</small>}</div></button><button className="hb-cat-edit" aria-label={`Изменить категорию «${c.name}»`} title="Изменить категорию" onClick={()=>{setBrush(c.id);setModal({kind:'category',category:c});}}><Icon name="settings" size={14}/></button></div>;})}</div>
+              <button type="button" className="hb-btn ghost full" onClick={()=>setModal({kind:'category'})}><Icon name="plus" size={17}/>Добавить категорию</button>
+              <button type="button" className="hb-btn soft full" onClick={()=>setModal({kind:'one-price'})}>Одна цена для всех мест</button>
+            </section>
+            <UnpricedFinder hall={hall} active={missingFocus} onShow={showMissing} onJump={jumpMissing}/>
+            <section className="hb-card hb-note"><Icon name="help" size={18}/><p>Место, стол целиком и входной билет — разные единицы продажи.</p></section>
+          </>:<>
+            <section className="hb-card"><h3>Проверка схемы</h3>
+              <div className={`hb-ready ${checks.length?'has-issues':''}`}><div className={checks.length?'warn':''}><i><Icon name={checks.length?'alert':'check'} size={13}/></i><b>{checks.length?`${checks.length} замечаний`:'Всё готово к продаже'}</b></div>
+              {checks.map((issue,i)=><button key={i} type="button" className="warn" onClick={()=>{if(issue.id){selectObject(issue.id);frame(hall.objects.filter(o=>o.id===issue.id));setStep(issue.stage==='pricing'?1:0);}}}><i><Icon name="alert" size={13}/></i><span>{issue.text}</span>{issue.id&&<Icon name="arrow" size={14}/>}</button>)}
+              {!checks.length&&<p className="hb-muted">Попробуйте выбрать места так, как это сделает покупатель.</p>}</div>
+            </section>
+            <section className="hb-card hb-note"><Icon name="eye" size={18}/><p>Так зал увидят гости. Выберите места, стол или зону — как при покупке. Оплата не выполняется.</p></section>
+          </>}
+        </div></aside>
+        <main className="canvas-shell hb-canvas"><div className="hb-toolbar">
+          <div className="hb-pill" role="group" aria-label="Параметры схемы"><Icon name="ruler" size={17}/><b>Зал</b><ToolbarDimension label="Ширина" value={Number((hall.room.w/SCALE).toFixed(2))} onCommit={w=>changeRoom({w:w*SCALE})}/><span className="hb-x">×</span><ToolbarDimension label="Глубина" value={Number((hall.room.h/SCALE).toFixed(2))} onCommit={h=>changeRoom({h:h*SCALE})}/><i className="hb-sep"/><span className="hb-cur" title="Валюта задаётся в настройках мероприятия">{hall.currency}</span><i className="hb-sep"/><SnapControl checked={snap} onChange={setSnap}/></div>
+          <div className="hb-pill hb-tools-seg" role="group" aria-label="Режим взаимодействия"><button className={tool==='select'?'on':''} aria-label="Выбор объектов" aria-pressed={tool==='select'} title="Выбор объектов" onClick={()=>{setTool('select');setDraw(null);}}><Icon name="cursor" size={18}/></button><button className={tool==='pan'?'on':''} aria-label="Перемещение по схеме" aria-pressed={tool==='pan'} title="Перемещение по схеме" onClick={()=>setTool('pan')}><Icon name="hand" size={18}/></button>{!inspector&&<button aria-label="Открыть панель настроек" title="Открыть панель настроек" onClick={()=>setInspector(true)}><Icon name="settings" size={17}/></button>}</div></div>
+
+          {step===1&&missingFocus&&missingObjects.length>0&&<div className="missing-navigation" aria-label="Навигация по объектам без цены"><Icon name="alert" size={15}/><span>{missingIndex>=0&&missingObjects[missingIndex]?`${missingIndex+1}/${missingObjects.length} · ${missingObjects[missingIndex].object.name}`:`Без цены: ${stats.unpriced} · ${missingObjects.length} объекта`}</span><button aria-label="Предыдущий объект без цены" onClick={()=>jumpMissing(missingIndex<0?missingObjects.length-1:missingIndex-1)}>‹</button><button aria-label="Следующий объект без цены" onClick={()=>jumpMissing(missingIndex+1)}>›</button><button aria-label="Закрыть подсветку без цены" onClick={()=>{setMissingFocus(false);setMissingObjectId(null);}}><Icon name="close" size={14}/></button></div>}
+          <div className={`canvas-container ${tool!=='select'?'drawing':''}`}><svg ref={svg} className="hall-canvas" viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`} preserveAspectRatio="xMidYMid meet" aria-label="Интерактивная схема зала" onPointerDown={canvasDown} onPointerMove={canvasMove} onPointerUp={canvasUp} onPointerCancel={cancelGesture} onWheel={e=>{if(e.ctrlKey||e.metaKey){e.preventDefault();zoom(e.deltaY>0?1.08:.92);}}}>
+            <defs><pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r=".8" fill="var(--grid)"/></pattern><filter id="floor-shadow"><feDropShadow dx="0" dy="6" stdDeviation="10" floodColor="#2a1630" floodOpacity=".045"/></filter></defs>
+            <rect data-floor="true" x={-10000} y={-10000} width={20000} height={20000} fill="url(#grid)"/>
+            <rect data-floor="true" x="0" y="0" width={hall.room.w} height={hall.room.h} rx="22" fill="var(--floor)" stroke="var(--floor-border)" strokeWidth="3" filter="url(#floor-shadow)"/>
+            <g className="precision-rulers" pointerEvents="none"><text x={hall.room.w/2} y="-26" textAnchor="middle">Ширина · {Number((hall.room.w/SCALE).toFixed(2))} м</text><text transform={`translate(-24 ${hall.room.h/2}) rotate(-90)`} textAnchor="middle">Глубина · {Number((hall.room.h/SCALE).toFixed(2))} м</text>{rulerTicks(hall.room.w).map(m=><line key={`x${m}`} x1={m*SCALE} x2={m*SCALE} y1="-7" y2="-2"/>)}{rulerTicks(hall.room.h).map(m=><line key={`y${m}`} x1="-7" x2="-2" y1={m*SCALE} y2={m*SCALE}/>)}</g>
+            {hall.objects.toSorted((a,b)=>shapeLayer(a)-shapeLayer(b)).map(o=><Shape key={o.id} o={o} hall={hall} selected={selection.includes(o.id)} editing={step===0&&!editingBlocked} unpricedIds={unpricedIds} detail={detail} selectedSeat={seatId} selectedRow={rowId} buyer={step===2} pricing={step===1} basket={basket} onObject={objectDown} onSeat={step!==0&&!canPriceObject(o)?undefined:seatDown} onRow={step===1&&!canPriceObject(o)?undefined:rowDown} onHandle={handleDown} onVertex={vertexDown}/>)}
+            {guide?.x!=null&&<><line x1={guide.x} y1="0" x2={guide.x} y2={hall.room.h} stroke="#a784ec" strokeDasharray="5 5" strokeWidth=".8"/><line x1="0" y1={guide.y} x2={hall.room.w} y2={guide.y} stroke="#a784ec" strokeDasharray="5 5" strokeWidth=".8"/></>}
+            {draw&&<g pointerEvents="none"><rect x={draw.x} y={draw.y} width={draw.w} height={draw.h} rx="8" fill="#8250e615" stroke="#8250e6" strokeDasharray="6 4" strokeWidth="2"/>{tool==='draw-rows'&&draw.w>60&&draw.h>60&&<Shape o={fitBlock(draw.x+draw.w/2,draw.y+draw.h/2,draw.w,draw.h,drawRowsDefaults.current)} hall={hall} mini/>}<rect x={draw.x} y={draw.y-35} width="260" height="28" rx="8" fill="#39234f"/><text x={draw.x+12} y={draw.y-17} fill="white" fontSize="12">{tool==='draw-rows'?`${fitBlock(0,0,draw.w,draw.h,drawRowsDefaults.current).rowCount} рядов · ${fitBlock(0,0,draw.w,draw.h,drawRowsDefaults.current).seats.length} мест`:tool==='ruler'?`${(Math.hypot(draw.w,draw.h)/SCALE).toFixed(2)} м`:'Отпустите, чтобы создать область'}</text></g>}
+          </svg>{hall.objects.length===0&&<div className="canvas-empty"><span><Icon name="plus" size={30}/></span><h3>Здесь начнётся ваше событие</h3><p>Добавьте ряды, столы или стоячую зону.<br/>Каждый объект можно переместить и настроить.</p><Btn variant="soft" icon="rows" onClick={()=>setModal({kind:'add',type:'rows'})}>Добавить первый блок</Btn></div>}</div>
+
+          {step===0&&selected&&!modal&&<SelectionActions object={selected} svg={svg} view={view} selection={selection} disabled={editingBlocked} pinned={hall.objects.filter(o=>selection.includes(o.id)).every(o=>o.pinned)} onSettings={openObjectSettings} onPin={()=>patch({pinned:!hall.objects.filter(o=>selection.includes(o.id)).every(o=>o.pinned)})} onSave={()=>setModal({kind:'save-fragment',objects:hall.objects.filter(o=>selection.includes(o.id))})} onCopy={()=>duplicate()} onDelete={deleteSelected}/>}
+          {tool!=='select'&&<div className="tool-hint"><Icon name={tool==='pan'?'hand':tool==='draw-standing'?'standing':tool==='ruler'?'ruler':'rows'} size={17}/>{tool==='pan'?'Перетащите фон, чтобы переместить схему':tool==='ruler'?'Протяните линию для измерения':'Протяните область мышью или пальцем'}<button onClick={()=>{setTool('select');setDraw(null);}}>Отмена</button></div>}
+          {guide?.rejected&&<div className="tool-hint warning">В этом размере кресла не помещаются. Увеличьте объект.</div>}
+          {step===1&&<div className="hb-legend" aria-label="Обозначения категорий">{hall.categories.filter(c=>c.active!==false).map(c=><span key={c.id} style={{'--c':c.color}}><i/>{c.name} · {money(c.price,hall.currency)}</span>)}<span className="unpriced"><i className={missingFocus?'unpriced-key':''}/>Без цены</span></div>}
+          <div className="hb-zoom"><button aria-label="Уменьшить масштаб" onClick={()=>zoom(1.2)}>−</button><output>{Math.round(roomView(hall).w/view.w*100)}%</output><button aria-label="Увеличить масштаб" onClick={()=>zoom(.83)}>+</button><i/><button aria-label="Показать всю схему" onClick={fit}><Icon name="fit" size={15}/></button></div>
+        </main>
+        {inspector&&<aside className={`hb-insp ${step===0&&!selected?'is-summary':''}`} onPointerDownCapture={e=>{if(e.target instanceof HTMLInputElement&&e.target.type==='range')gesture.current={kind:'slider',before:clone(hallRef.current)};}} onPointerUpCapture={()=>{if(gesture.current?.kind==='slider'){const before=gesture.current.before;gesture.current=null;commit(hallRef.current,before);}}} onPointerCancelCapture={()=>{if(gesture.current?.kind==='slider'){setHall(gesture.current.before);gesture.current=null;}}}><section className="hb-card hb-insp-card" key={step}><div className="inspector-heading"><span className="hb-eyebrow">{step===2?'Ваш тестовый выбор':step===1?'Цены и выделение':selection.length>1?`Выбрано ${selection.length}`:selected?'Настройки объекта':'Вместимость зала'}</span><button className="hb-round sm" aria-label="Скрыть панель" title="Скрыть панель" onClick={()=>setInspector(false)}><Icon name="close" size={15}/></button></div><div className="inspector-content" ref={inspectorContent}>
+          {step===2?<BuyerBasket hall={hall} basket={basket} setBasket={setBasket}/>:step===1?<PricingPanel hall={hall} selection={selection} seatId={seatId} rowId={rowId} detail={detail} brush={brush} money={money} onScope={pricingScope} onClearSelection={()=>{setSelection([]);setSeatId(null);setRowId(null);setPriceProposal(null);}} onShowMissing={showMissing} onEditCategory={()=>setModal({kind:'category',category:category(hall,brush)})}/>
+:selected?renderInspector():<><div className="hb-big">{stats.guests}<small>гостей</small></div><dl className="hb-dl"><div><dt><Icon name="seat" size={16}/>Отдельные места</dt><dd>{stats.individual}</dd></div><div><dt><Icon name="round" size={16}/>Столы целиком</dt><dd>{stats.wholeTables} · {stats.included} гостей</dd></div><div><dt><Icon name="standing" size={16}/>Стоячие билеты</dt><dd>{stats.standing}</dd></div></dl><button type="button" className="hb-btn soft full" onClick={()=>setModal({kind:'save-library'})}><Icon name="save" size={17}/>Сохранить в мои залы</button></>}
+        </div></section></aside>}
+      </div>
+      <footer className="hb-status"><div className="hb-stats"><span><Icon name="seat" size={15}/><b>{stats.individual}</b> мест</span><span><Icon name="round" size={15}/><b>{stats.wholeTables}</b> столов целиком</span><span><Icon name="standing" size={15}/><b>{stats.standing}</b> входных</span><span className="total">Всего <b>{stats.guests}</b> гостей</span></div><span className={`hb-saved ${saveStatus==='Не сохранено'?'error':''}`} role="status" aria-live="polite"><Icon name={saveStatus==='Не сохранено'?'alert':'cloud'} size={15}/>{saving?'Сохраняем зал…':saveStatus}</span></footer>
+    </>}
+    <input ref={upload} type="file" accept="application/json,.json" hidden onChange={e=>importJSON(e.target.files[0])}/>
+    {priceProposal&&priceProposal.hall===hall&&step===1&&!modal&&<PricingConfirmation key={`${priceProposal.categoryId}:${priceProposal.selection.join(',')}:${priceProposal.seatId}:${priceProposal.rowId}`} proposal={priceProposal} hall={hall} money={money} onApply={applyPricing} onChangeSaleMode={openSaleModeSettings} onCancel={cancelPricing}/>}
+    {toast&&<div className={`toast ${toastKind}`} role={toastKind==='error'?'alert':'status'}><Icon name={toastKind==='error'?'alert':'check'} size={17}/><span>{toast}</span>{!modal&&toastUndoRevision===hall.revision&&<button onClick={()=>{undo();setToast('');}}>Отменить</button>}</div>}
+    {modal&&<Modal title={modal.title??({add:`Добавить: ${TYPES[modal.type]}`,library:'Мои сохранённые залы','save-library':'Сохранить в мои залы',category:modal.category?'Изменить категорию':'Новая категория цены',more:'Ещё на схеме','one-price':'Одна цена для всех мест',menu:'Действия со схемой',fragments:'Сохранённые блоки','save-fragment':'Сохранить как блок','preview-hall':modal.item?.hall.name,'manage-hall':'Настройки сохранённого зала','delete-category':'Удалить категорию цены',objects:'Объекты на схеме'}[modal.kind])} close={()=>setModal(null)} wide={['add','edit-table','edit-rows','library','preview-hall'].includes(modal.kind)} docked={modal.kind==='add'&&!['rows','round','rect'].includes(modal.type)}>
+      {modal.kind==='add'&&tableType({type:modal.type})&&<TableComposer key={modal.type} type={modal.type} hall={hall} availableSpot={availableSpot} onSubmit={addObjects}/>}
+      {modal.kind==='edit-table'&&selected&&<TableComposer key={selected.id} type={selected.type} initialObject={selected} hall={hall} onSubmit={saveObjectEdit} renderSettings={(object,onChange)=><PlacementSettings object={object} onChange={onChange} hall={hall}/>}/>}
+      {modal.kind==='edit-rows'&&selected&&<RowsForm key={selected.id} initialObject={selected} hall={hall} onAdd={objects=>saveObjectEdit(objects[0])}/>}
+      {modal.kind==='object-settings'&&selected&&renderInspector()}
+      {modal.kind==='add'&&modal.type==='rows'&&<RowsForm hall={hall} availableSpot={availableSpot} onAdd={addObjects} onDraw={object=>{const {name,seatPitch,rowPitch,aisle,aisleWidth,firstRow,firstSeat,reverse,curvature}=object;drawRowsDefaults.current={name,seatPitch,rowPitch,aisle,aisleWidth,firstRow,firstSeat,reverse,curvature};setTool('draw-rows');setModal(null);}}/>}
+      {modal.kind==='add'&&!['rows','round','rect'].includes(modal.type)&&<AddForm key={modal.preset?.key??modal.type} preset={modal.preset} type={modal.type} hall={hall} onAdd={addObjects} availableSpot={availableSpot} onDraw={type=>{setTool(`draw-${type}`);setModal(null);}}/>}
+      {modal.kind==='library'&&renderLibrary()}
+      {modal.kind==='preview-hall'&&<><div className="large-preview"><MiniHall hall={modal.item.hall}/></div><Stats hall={modal.item.hall}/><p className="fineprint">Вы получите независимую копию. Исходный зал останется без изменений.</p><div className="modal-actions"><Btn variant="primary" icon="check" onClick={()=>chooseHall(modal.item.hall)}>Использовать зал</Btn><Btn icon="settings" onClick={()=>chooseHall(modal.item.hall)}>Использовать и изменить</Btn></div></>}
+      {modal.kind==='manage-hall'&&<LibraryManage item={modal.item} onSave={async name=>{try{await host.updateLibrary(modal.item.id,{name});setModal(null);}catch(error){notify(error.message);}}} onArchive={async()=>{try{await host.updateLibrary(modal.item.id,{archived:!modal.item.archived});setModal(null);}catch(error){notify(error.message);}}}/>}
+      {modal.kind==='save-library'&&<NameForm label="Название сохранённого зала" initialName={hall.name} button="Сохранить зал" onSubmit={async name=>{if(!await save(hall)){notify('Сначала сохраните черновик');return;}try{const item=await host.saveLibrary({...clone(hall),name});setLibrary(list=>[item,...list.filter(old=>old.id!==item.id)]);setModal(null);notify('Зал сохранён в библиотеку');}catch(error){notify(error.message||'Не удалось сохранить зал');}}}/>}
+      {modal.kind==='category'&&<CategoryForm initial={modal.category} unitLocked={!!modal.category&&hall.objects.some(o=>[o.categoryId,...(o.rows??[]).map(r=>r.categoryId),...(o.seats??[]).map(s=>s.categoryId)].includes(modal.category.id))} defaultUnit={preferredPriceUnit} currency={hall.currency} assignment={!modal.category&&step===1?priceSelection.counts:null} onSubmit={(c,apply)=>{try{const result=savePricingCategory(hall,c,{replaceId:modal.category?.id,selection,seatId,rowId,apply});if(!commit(result.hall))return;setBrush(result.categoryId);setModal(null);if(apply)notify(`«${c.name}» создана и назначена: ${inventoryLabel(priceSelection.counts)}`,hall.revision+1);else notify(modal.category?'Категория обновлена во всех связанных местах.':'Категория создана. Выберите объекты для назначения.',hall.revision+1);}catch(error){notify(error.message);}}} onDelete={modal.category?()=>setModal({kind:'delete-category',category:modal.category}):null}/>}
+      {modal.kind==='delete-category'&&<ReassignForm hall={hall} target={modal.category} onSubmit={replacement=>{commit({...hall,categories:hall.categories.filter(c=>c.id!==modal.category.id),objects:hall.objects.map(o=>({...o,categoryId:o.categoryId===modal.category.id?replacement:o.categoryId,rows:o.rows?.map(r=>({...r,categoryId:r.categoryId===modal.category.id?replacement:r.categoryId})),seats:o.seats?.map(s=>({...s,categoryId:s.categoryId===modal.category.id?replacement:s.categoryId}))}))});setBrush(replacement);setModal(null);}}/>}
+
+      {modal.kind==='one-price'&&<OnePrice hall={hall} onSubmit={(price,unit)=>{
+        const c={id:uid(),name:unit==='seat'?'Единая цена':unit==='table'?'Все столы':'Единый вход',price,color:COLORS[hall.categories.length%COLORS.length],unit,active:true};
+        const ids=hall.objects.filter(o=>unitOf(o)===unit).map(o=>o.id);
+        try{const result=savePricingCategory(hall,c,{selection:ids,apply:true});if(!commit(result.hall))return;setBrush(result.categoryId);setModal(null);notify(`Единая цена назначена: ${inventoryLabel(selectionPricing(result.hall,ids).counts)}`,hall.revision+1);}catch(error){notify(error.message);}
+      }}/>}
+      {modal.kind==='more'&&<div className="more-grid">{['entrance','obstacle','seat'].map(type=><button key={type} onClick={()=>setModal({kind:'add',type})}><Icon name={type} size={25}/><b>{TYPES[type]}</b><Icon name="plus" size={16}/></button>)}<button onClick={()=>{setTool('ruler');setModal(null);}}><Icon name="ruler" size={25}/><b>Измерить расстояние</b><Icon name="arrow" size={16}/></button></div>}
+      {modal.kind==='menu'&&<div className="menu-list"><Btn icon="undo" disabled={saving||!history.current.past.length} onClick={()=>undo()}>Отменить изменение</Btn><Btn icon="redo" disabled={saving||!history.current.future.length} onClick={()=>undo(true)}>Повторить изменение</Btn><Btn icon="folder" onClick={()=>setModal({kind:'library'})}>Выбрать другой зал</Btn><Btn icon="save" onClick={()=>setModal({kind:'save-library'})}>Сохранить в мои залы</Btn><Btn icon="download" onClick={()=>{exportJSON();setModal(null);}}>Экспортировать JSON</Btn><Btn icon="folder" onClick={()=>{upload.current.click();setModal(null);}}>Импортировать JSON</Btn><Btn icon="cloud" onClick={async()=>{if(await save(hall)){notify('Черновик сохранён');setModal(null);}else notify('Не удалось сохранить. Скачайте JSON для восстановления.');}}>Сохранить сейчас</Btn><Btn icon="help" onClick={()=>setModal({kind:'help',title:'Как пользоваться'})}>Горячие клавиши и возможности</Btn><Btn icon="trash" variant="danger" onClick={()=>setModal({kind:'confirm',title:'Очистить схему?',text:'Категории цен сохранятся. Удаление всех объектов можно отменить.',action:()=>{commit({...hall,objects:[]});setSelection([]);}})}>Очистить схему</Btn></div>}
+      {modal.kind==='help'&&<div className="help-copy"><p>Добавьте готовый объект или нарисуйте область для рядов и стоячих билетов. Выберите его на схеме, чтобы изменить параметры.</p><dl className="summary-list">{[['Отмена / повтор','Ctrl / Cmd Z · Shift Z'],['Копия','Ctrl / Cmd D'],['Копировать / вставить','Ctrl / Cmd C · V'],['Выбрать несколько','Shift + клик / рамка'],['Показать всю схему','Ctrl / Cmd 0'],['Передвинуть','Стрелки · Shift — быстрее'],['Отменить рисование','Escape']].map(([a,b])=><div key={a}><dt>{a}</dt><dd>{b}</dd></div>)}</dl><p className="fineprint">Изменения сохраняются в черновике. Схема не определяет допустимую вместимость площадки.</p></div>}
+      {modal.kind==='save-fragment'&&<NameForm label="Название блока" initialName={modal.objects.length===1?modal.objects[0].name:"Новый блок"} button="Сохранить блок" onSubmit={name=>{setFragments(list=>[...list,{id:uid(),name,currency:hall.currency,objects:clone(modal.objects),categories:clone(fragmentCategories(modal.objects,hall.categories))}]);setModal(null);notify('Выбранные объекты сохранены как блок');}}/>}
+      {modal.kind==='objects'&&<ObjectList hall={hall} selection={selection} searchable onSelect={id=>{revealObject(id);setModal(null);}}/>}
+      {modal.kind==='fragments'&&<p className="fineprint">Блоки доступны в этом браузере для ваших схем. Для доступа с другого устройства сохраните весь зал в «Мои залы».</p>}
+      {modal.kind==='fragments'&&<div className="fragment-list">{fragments.length?fragments.map(f=><button key={f.id} onClick={()=>{const inserted=insertFragment(hall,f);if(!commit(inserted.hall))return;setModal(null);setSelection(inserted.objects.map(o=>o.id));}}><Icon name="layers"/><strong>{f.name}</strong><small>{f.objects.length} объектов</small><Icon name="plus"/></button>):<div className="empty-state"><Icon name="layers" size={32}/><h3>Блоков пока нет</h3><p>Выберите объекты и нажмите «Сохранить как блок».</p></div>}</div>}
+      {modal.kind==='confirm'&&<><p className="confirm-copy">{modal.text}</p><div className="modal-actions"><Btn onClick={()=>setModal(null)}>Отмена</Btn><Btn variant="primary" onClick={()=>{const action=modal.action;setModal(null);action();}}>Подтвердить</Btn></div></>}
+    </Modal>}
+  </div>;
+}
+function Inspector({ highlightSaleMode=false, hall, object:o, selection, selectedSeat, selectedRow, detail,setDetail,setSeatId,setRowId,patch,patchSeat,patchRow,commit,duplicate,remove,notify,setModal,fragments,setFragments }) {
+  const saleModeControl=useRef(null);
+  useLayoutEffect(()=>{
+    if(!highlightSaleMode||!saleModeControl.current)return;
+    saleModeControl.current.scrollIntoView({block:'center',inline:'nearest'});
+    saleModeControl.current.focus({preventScroll:true});
+  },[highlightSaleMode,o.id]);
+  const children=seatPositions(o), selectedPosition=children.find(s=>s.id===selectedSeat?.id), isTable=tableType(o);
+  const changeSize=(key,value)=>{if(value==null)return;const next=resizeObject(o,key==='w'||o.type==='round'?value*SCALE:o.w,key==='h'||o.type==='round'?value*SCALE:o.h);if(!next){notify('В этом размере кресла не помещаются. Увеличьте объект или уменьшите число мест.');return;}commit({...hall,objects:hall.objects.map(v=>v.id===o.id?next:v)});};
+
+  if(selection.length>1)return <><div className="panel-note"><Icon name="layers" size={30}/><h3>{selection.length} объектов</h3><p>Действия применяются ко всем выбранным объектам.</p></div><div className="button-stack"><Btn icon="copy" onClick={()=>duplicate()}>Дублировать выбранное</Btn><Btn icon="pin" onClick={()=>patch({pinned:true})}>Закрепить положение</Btn><Btn icon="pin" onClick={()=>patch({pinned:false})}>Открепить</Btn><Btn icon="eye" onClick={()=>patch({disabled:true})}>Не продавать</Btn><Btn icon="eye" onClick={()=>patch({disabled:false})}>Вернуть в продажу</Btn><Btn onClick={()=>{const objects=hall.objects.filter(v=>selection.includes(v.id)),minY=Math.min(...objects.map(v=>v.y));commit({...hall,objects:hall.objects.map(v=>selection.includes(v.id)?{...v,y:minY}:v)});}}>Выровнять по верхнему краю</Btn><Btn onClick={()=>{const selected=hall.objects.filter(v=>selection.includes(v.id)).sort((a,b)=>a.x-b.x);if(selected.length<3){notify('Для распределения выберите минимум 3 объекта');return;}const lo=selected[0].x,hi=selected.at(-1).x;commit({...hall,objects:hall.objects.map(v=>{const i=selected.findIndex(s=>s.id===v.id);return i<0?v:{...v,x:lo+i*(hi-lo)/(selected.length-1)};})});}}>Распределить по горизонтали</Btn><Btn icon="save" onClick={()=>setModal({kind:'save-fragment',title:'Сохранить выбранный блок',objects:hall.objects.filter(v=>selection.includes(v.id))})}>Сохранить как блок</Btn><Btn variant="danger" icon="trash" onClick={remove}>Удалить выбранное</Btn></div></>;
+  return <>
+    {(selectedSeat||selectedRow)&&<Btn icon="back" className="full inspector-parent-back" onClick={()=>{setSeatId(null);setRowId(null);setDetail('object');}}>{isTable?'К настройкам стола':'К настройкам блока'}</Btn>}
+    <div className="selected-object"><span style={{color:getColor(hall,o)}}><Icon name={o.type} size={24}/></span><div><b>{o.name}</b><small>{o.type==='obstacle'?'Ориентир · не продаётся':TYPES[o.type]}{o.seats?` · ${o.seats.length} мест`:''}{isTable?o.type==='round'?` · Ø ${Number((o.w/SCALE).toFixed(2))} м`:` · ${Number((o.w/SCALE).toFixed(2))} × ${Number((o.h/SCALE).toFixed(2))} м`:''}</small></div></div>
+
+    {isTable&&!selectedSeat&&!selectedRow&&<Btn icon="settings" className="full" onClick={()=>setModal({kind:'edit-table',title:`Изменить: ${o.name}`,objectId:o.id})}>Редактировать стол</Btn>}
+    {!selectedSeat&&!selectedRow&&<Field label="Название"><input aria-label="Название объекта" value={o.name} onChange={e=>patch({name:e.target.value})} maxLength={120}/></Field>}
+    {selectedSeat?<><div className="detail-banner">{selectedPosition?.rowNumber?`Ряд ${selectedPosition.rowNumber} → `:''}Место {selectedPosition?.number}<button aria-label="Вернуться к объекту" onClick={()=>setSeatId(null)}><Icon name="close" size={14}/></button></div><p className="fineprint">Перетащите это кресло на схеме. Изменение сохранится при перемещении всего объекта.</p>{o.type==='round'?<NumberField label="Угол кресла, °" value={Math.round((selectedPosition?.angle??0)*180/Math.PI)} min={-180} max={180} step={5} onChange={v=>{if(v==null)return;const r=o.w/2+o.chairOffset;const moved=moveSeat(o,selectedSeat.id,{x:Math.cos(v*Math.PI/180)*r,y:Math.sin(v*Math.PI/180)*r});commit({...hall,objects:hall.objects.map(item=>item.id===o.id?moved:item)});}}/>:<div className="field-pair"><NumberField label="Сдвиг X" value={Math.round(selectedSeat.dx??0)} min={-300} max={300} onChange={v=>v!=null&&patchSeat({dx:v})}/><NumberField label="Сдвиг Y" value={Math.round(selectedSeat.dy??0)} min={-300} max={300} onChange={v=>v!=null&&patchSeat({dy:v})}/></div>}<Toggle label="Не продавать это место" checked={selectedSeat.disabled} onChange={v=>patchSeat({disabled:v})}/><Btn icon="rotate" className="full" onClick={()=>patchSeat({dx:0,dy:0,angle:undefined})}>Сбросить положение места</Btn></>:selectedRow?<><div className="detail-banner">Ряд {o.firstRow+o.rows.findIndex(r=>r.id===selectedRow.id)}<button aria-label="Вернуться к блоку" onClick={()=>setRowId(null)}><Icon name="close" size={14}/></button></div><Field label="Выбрать ряд"><select value={selectedRow.id} onChange={e=>setRowId(e.target.value)}>{o.rows.map((r,i)=><option key={r.id} value={r.id}>Ряд {o.firstRow+i}</option>)}</select></Field><NumberField label="Мест в этом ряду" value={selectedRow.count} min={1} max={40} onChange={v=>v!=null&&patchRow({count:v})}/><div className="field-pair"><NumberField label="Сдвиг ряда X" value={selectedRow.dx||0} min={-300} max={300} onChange={v=>v!=null&&patchRow({dx:v})}/><NumberField label="Сдвиг ряда Y" value={selectedRow.dy||0} min={-300} max={300} onChange={v=>v!=null&&patchRow({dy:v})}/></div><NumberField label="Интервал мест в ряду" value={selectedRow.pitch??o.seatPitch} min={22} max={80} onChange={v=>v!=null&&patchRow({pitch:v})}/></>:<>
+      {o.type==='rows'&&<><Field label="Настроить отдельный ряд"><select value="" onChange={e=>{if(e.target.value){setRowId(e.target.value);setSeatId(null);}}}><option value="">Весь блок</option>{o.rows.map((row,index)=><option key={row.id} value={row.id}>Ряд {o.firstRow+index}</option>)}</select></Field><div className="field-pair"><NumberField label="Рядов" value={o.rowCount} min={1} max={100} onChange={v=>v!=null&&patch({rowCount:v})}/><NumberField label="Мест в ряду" value={o.seatsPerRow} min={1} max={40} onChange={v=>v!=null&&patch({seatsPerRow:v})}/></div><Field label="Между рядами"><div className="range-row"><input aria-label="Расстояние между рядами" type="range" min="28" max="90" value={o.rowPitch} onChange={e=>patch({rowPitch:Number(e.target.value)})}/><span>{(o.rowPitch/SCALE).toFixed(2)} м</span></div></Field><Field label="Между местами"><div className="range-row"><input aria-label="Расстояние между местами" type="range" min="22" max="65" value={o.seatPitch} onChange={e=>patch({seatPitch:Number(e.target.value)})}/><span>{(o.seatPitch/SCALE).toFixed(2)} м</span></div></Field><Field label="Проход"><select value={o.aisle} onChange={e=>patch({aisle:e.target.value})}><option value="none">Без прохода</option><option value="center">По центру</option><option value="left">Слева</option><option value="right">Справа</option></select></Field>{o.aisle!=='none'&&<NumberField label="Ширина прохода, м" value={Number((o.aisleWidth/SCALE).toFixed(2))} min={.5} max={4} step={.1} onChange={v=>v!=null&&patch({aisleWidth:v*SCALE})}/>}<Disclosure title="Нумерация и форма"><div className="field-pair"><NumberField label="Первый ряд" value={o.firstRow} min={1} max={999} onChange={v=>v!=null&&patch({firstRow:v})}/><NumberField label="Первое место" value={o.firstSeat} min={1} max={999} onChange={v=>v!=null&&patch({firstSeat:v})}/></div><Field label="Направление мест"><select value={o.reverse?'reverse':'normal'} onChange={e=>patch({reverse:e.target.value==='reverse'})}><option value="normal">Слева направо →</option><option value="reverse">Справа налево ←</option></select></Field><NumberField label="Изгиб рядов" value={o.curvature} min={-100} max={100} step={5} onChange={v=>v!=null&&patch({curvature:v})}/></Disclosure><Btn className="full" icon="rotate" onClick={()=>setModal({kind:'confirm',title:'Заполнить область заново?',text:'Будут пересчитаны ряды и места. Индивидуальные положения и настройки рядов в этом блоке будут сброшены.',action:()=>{const next=fitBlock(o.x,o.y,o.w,o.h,{seatPitch:o.seatPitch,rowPitch:o.rowPitch,aisle:o.aisle,aisleWidth:o.aisleWidth,name:o.name,categoryId:o.categoryId});commit({...hall,objects:hall.objects.map(v=>v.id===o.id?{...next,id:o.id}:v)});}})}>Заполнить заново</Btn></>}
+      {isTable&&<><div ref={saleModeControl} data-sale-mode-control="true" className={`sale-mode-control ${highlightSaleMode?'highlighted':''}`} role="group" aria-label="Тип продажи стола" tabIndex={-1}><Field label="Что продаём"><div className="mode-options"><button className={o.saleMode==='whole_table'?'active':''} onClick={()=>{if(o.saleMode==='whole_table')return;setModal({kind:'confirm',title:'Продавать стол целиком?',text:'Индивидуальные цены мест не будут использоваться. Назначьте категорию с ценой за стол.',action:()=>patch({saleMode:'whole_table',categoryId:null})});}}><Icon name="round" size={18}/> Стол целиком</button><button className={o.saleMode==='per_seat'?'active':''} onClick={()=>{if(o.saleMode==='per_seat')return;setModal({kind:'confirm',title:'Продавать отдельные места?',text:'Каждое кресло станет отдельной единицей продажи. Назначьте цену за место.',action:()=>patch({saleMode:'per_seat',categoryId:null})});}}><Icon name="seat" size={18}/> По местам</button></div></Field>{highlightSaleMode&&<p className="fineprint sale-mode-focus-hint">Выберите тип продажи, затем вернитесь на шаг «Цены».</p>}</div><Disclosure title="Размер стола и расстояния"><div className="field-pair"><NumberField label={o.type==='round'?'Диаметр, м':'Ширина, м'} value={Number((o.w/SCALE).toFixed(2))} min={1} max={10} step={.1} onChange={v=>changeSize('w',v)}/>{o.type==='rect'&&<NumberField label="Глубина, м" value={Number((o.h/SCALE).toFixed(2))} min={.75} max={10} step={.1} onChange={v=>changeSize('h',v)}/>}</div><NumberField label="Зазор от края стола до кресла, м" hint="Свободное расстояние до переднего края кресла" value={Number(((o.chairOffset-CHAIR/2)/SCALE).toFixed(3))} min={0} max={2.775} step={.025} onChange={v=>v!=null&&patch({chairOffset:v*SCALE+CHAIR/2})}/><Btn className="full" onClick={()=>patch({chairOffset:TABLE_CHAIR_OFFSET})}>Обычное расстояние до стола</Btn><Btn className="full" onClick={()=>setModal({kind:'confirm',title:'Распределить кресла заново?',text:'Ручные позиции кресел будут сброшены. Количество и идентификаторы мест сохранятся.',action:()=>commit({...hall,objects:hall.objects.map(v=>v.id===o.id?{...v,seats:v.seats.map(s=>({...s,dx:0,dy:0,angle:undefined}))}:v)})})}>Распределить равномерно</Btn></Disclosure></>}
+      {o.type==='standing'&&<><Btn className="full" icon="layers" onClick={()=>{if(!(o.capacity>=2)||o.points){notify('Нужна прямоугольная зона с вместимостью от 2 билетов');return;}setModal({kind:'confirm',title:'Разделить стоячую зону?',text:`Будут созданы две зоны по ${Math.ceil(o.capacity/2)} и ${Math.floor(o.capacity/2)} билетов. Общая вместимость сохранится.`,action:()=>commit({...hall,objects:hall.objects.flatMap(v=>v.id===o.id?splitStanding(v):[v])})});}}>Разделить зону</Btn><NumberField label="Вместимость зоны" hint="Количество входных билетов. Не зависит от размера рисунка." value={o.capacity} min={1} max={100000} onChange={v=>patch({capacity:v})}/><Btn variant="soft" className="full" icon="settings" onClick={()=>{if(!o.points)patch({points:[{x:-.5,y:-.5},{x:.5,y:-.5},{x:.5,y:.5},{x:-.5,y:.5}]});setDetail(detail==='shape'?'object':'shape');if(detail!=='shape')setModal(null);}}> {detail==='shape'?'Завершить изменение формы':'Изменить форму зоны'}</Btn>{detail==='shape'&&<><p className="fineprint">Двигайте точки на контуре. Правой кнопкой — удалить точку.</p><div className="field-pair"><Btn onClick={()=>{const points=o.points??[];if(points.length>=100)return;const a=points[0],b=points[1];patch({points:[a,{x:(a.x+b.x)/2,y:(a.y+b.y)/2},...points.slice(1)]});}}>+ Точка</Btn><Btn disabled={!o.points||o.points.length<=3} onClick={()=>patch({points:o.points.slice(0,-1)})}>− Точка</Btn></div><Btn className="full" onClick={()=>{patch({points:null});setDetail('object');}}>Вернуть прямоугольник</Btn></>}<Disclosure title="Точные размеры зоны"><div className="field-pair"><NumberField label="Ширина зоны, м" value={Number((o.w/SCALE).toFixed(2))} min={1} max={50} step={.5} onChange={v=>v!=null&&patch({w:v*SCALE})}/><NumberField label="Глубина зоны, м" value={Number((o.h/SCALE).toFixed(2))} min={1} max={50} step={.5} onChange={v=>v!=null&&patch({h:v*SCALE})}/></div><p className="fineprint">Рисунок не определяет допустимую вместимость площадки.</p></Disclosure></>}
+      {['stage','obstacle'].includes(o.type)&&<><Field label="Цвет объекта"><input aria-label="Цвет объекта" type="color" value={o.color} onChange={e=>patch({color:e.target.value})}/></Field><div className="field-pair"><NumberField label="Ширина объекта, м" value={Number((o.w/SCALE).toFixed(2))} min={.5} max={30} step={.5} onChange={v=>v!=null&&patch({w:v*SCALE})}/><NumberField label="Глубина объекта, м" value={Number((o.h/SCALE).toFixed(2))} min={.5} max={30} step={.5} onChange={v=>v!=null&&patch({h:v*SCALE})}/></div></>}
+      {o.type==='entrance'&&<Field label="Тип прохода"><select value={o.entranceType} onChange={e=>patch({entranceType:e.target.value,name:e.target.value==='out'?'Выход':e.target.value==='both'?'Вход / выход':'Вход'})}><option value="in">Вход →</option><option value="out">Выход ←</option><option value="both">Вход / выход ↔</option></select></Field>}
+    </>}
+    {children.length>0&&!selectedSeat&&!selectedRow&&<section className="inspector-seat-list" aria-label="Выбор отдельного места"><h3>{isTable?'Места за столом':'Места в блоке'}</h3><p className="fineprint">Выберите кресло здесь или прямо на схеме.</p><div className="seat-picker">{children.map(s=><button key={s.id} type="button" aria-label={`Настроить ${s.rowNumber?`ряд ${s.rowNumber}, `:''}место ${s.number}`} onClick={()=>{setSeatId(s.id);setRowId(null);}} style={{background:s.disabled?'var(--ticket-border)':getColor(hall,o,s),color:textOn(s.disabled?'var(--ticket-border)':getColor(hall,o,s))}}>{s.rowNumber?`${s.rowNumber}·`:''}{s.number}</button>)}</div></section>}
+    {!selectedSeat&&!selectedRow&&<><div className="panel-divider"/><Toggle label="Закрепить положение" hint="Не перемещается на схеме" checked={o.pinned} onChange={v=>patch({pinned:v})}/>{['rows','round','rect','standing','seat'].includes(o.type)&&<Toggle label="Не продавать" hint="Не входит в доступную вместимость" checked={o.disabled} onChange={v=>patch({disabled:v})}/>}<Disclosure title="Точное положение"><div className="field-pair"><NumberField label="X, м" value={Number((o.x/SCALE).toFixed(2))} min={-50} max={200} step={.1} onChange={v=>v!=null&&patch({x:v*SCALE})}/><NumberField label="Y, м" value={Number((o.y/SCALE).toFixed(2))} min={-50} max={200} step={.1} onChange={v=>v!=null&&patch({y:v*SCALE})}/></div><NumberField label="Поворот, °" value={Math.round(o.rotation)} min={-180} max={180} step={5} onChange={v=>v!=null&&patch({rotation:v})}/><div className="field-pair"><Btn onClick={()=>patch({x:hall.room.w/2})}>По центру X</Btn><Btn onClick={()=>patch({y:hall.room.h/2})}>По центру Y</Btn></div></Disclosure><div className="field-pair object-actions"><Btn icon="copy" onClick={()=>duplicate()}>Копия</Btn><Btn icon="trash" variant="danger" onClick={remove}>Удалить</Btn></div><Btn icon="save" className="full" onClick={()=>{setFragments([...fragments,{id:uid(),name:o.name,currency:hall.currency,objects:[clone(o)],categories:clone(fragmentCategories([o],hall.categories))}]);notify('Блок сохранён в этом браузере');}}>Сохранить как блок</Btn></>}
+  </>;
+}
+function BuyerBasket({hall,basket,setBasket}) {
+  const items=[];
+  for(const o of hall.objects){if(basket[o.id])items.push({id:o.id,name:o.name,qty:basket[o.id],max:o.type==='standing'?o.capacity:1,unit:unitOf(o),category:category(hall,o.categoryId),included:o.saleMode==='whole_table'?o.seats.filter(s=>!s.disabled).length:0});for(const s of seatPositions(o)){if(basket[s.id])items.push({id:s.id,name:`${o.name}${s.rowNumber?` · ряд ${s.rowNumber}`:''} · место ${s.number}`,qty:1,max:1,unit:'seat',category:resolvedCategory(hall,o,s,s.row)});}}
+  const total=items.reduce((n,v)=>n+(v.category?.price??0)*v.qty,0);
+  return <>{items.length?<><div className="basket-items">{items.map(item=><article key={item.id}><span className="basket-dot" style={{background:item.category?.color}}/><div><h3>{item.name}</h3><p>{item.category?.name} · {units[item.unit]}</p>{item.included>0&&<p>Включено {item.included} мест</p>}{item.unit==='entry'&&<div className="qty"><button aria-label={`Уменьшить количество ${item.name}`} disabled={item.qty<=1} onClick={()=>setBasket(v=>({...v,[item.id]:item.qty-1}))}>−</button><b>{item.qty}</b><button aria-label={`Увеличить количество ${item.name}`} disabled={item.qty>=item.max} onClick={()=>setBasket(v=>({...v,[item.id]:item.qty+1}))}>+</button><small>из {item.max}</small></div>}<strong>{money((item.category?.price??0)*item.qty,hall.currency)}</strong></div><button className="icon-btn" aria-label={`Убрать ${item.name}`} onClick={()=>setBasket(v=>({...v,[item.id]:0}))}><Icon name="close" size={14}/></button></article>)}</div><div className="panel-divider"/><div className="basket-total"><span>Итого</span><b>{money(total,hall.currency)}</b></div><Btn className="full" onClick={()=>setBasket({})}>Очистить выбор</Btn><p className="fineprint">Проверка взаимодействия. Бронирование и оплата не выполняются.</p></>:<div className="panel-note"><div className="panel-note-icon"><Icon name="seat" size={25}/></div><h3>Попробуйте свою схему</h3><p>Нажмите на свободное кресло, стол целиком или стоячую зону.</p><div className="selection-legend"><span><i style={{background:'#7845ed'}}/> Доступно</span><span><i style={{background:'var(--ticket-primary)'}}/> Выбрано</span><span><i style={{background:'var(--ticket-dim)'}}/> Не продаётся</span></div></div>}<div className="panel-divider"/><span className="eyebrow">ПОЛНАЯ ВМЕСТИМОСТЬ</span><div className="guest-number">{summary(hall).guests}<span>гостей</span></div></>;
+}
+function SelectionActions({object,svg,view,selection,disabled,pinned,onSettings,onCopy,onDelete,onPin,onSave}) {
+  const [position,setPosition]=useState({left:12,top:72}),toolbar=useRef(null);
+  useLayoutEffect(()=>{
+    const place=()=>{const canvas=svg.current;if(!canvas||!toolbar.current)return;const matrix=canvas.getScreenCTM();if(!matrix)return;const b=worldBounds(object),point=new DOMPoint((b.left+b.right)/2,b.top).matrixTransform(matrix),shell=canvas.closest('.canvas-shell').getBoundingClientRect(),size=toolbar.current.getBoundingClientRect();setPosition({left:clamp(point.x-shell.left-size.width/2,8,Math.max(8,shell.width-size.width-8)),top:clamp(point.y-shell.top-size.height-45,66,Math.max(66,shell.height-size.height-12))});};
+    place();const observer=new ResizeObserver(place);if(svg.current)observer.observe(svg.current);return()=>observer.disconnect();
+  },[object,view,selection.length]);
+  return <div ref={toolbar} className="selection-actions" role="toolbar" aria-label="Действия с выделением" style={position}>
+    <button type="button" disabled={disabled} aria-label="Настройки объекта" title="Настройки" onClick={onSettings}><Icon name="settings" size={17}/></button>
+    <button type="button" disabled={disabled} aria-label="Копировать выделение" title="Копия" onClick={onCopy}><Icon name="copy" size={17}/></button>
+    <button type="button" disabled={disabled} aria-pressed={pinned} aria-label={pinned?'Открепить выделение':'Закрепить выделение'} title={pinned?'Открепить':'Закрепить'} onClick={onPin}><Icon name={pinned?'unlock':'lock'} size={17}/></button>
+    <button type="button" disabled={disabled} aria-label="Сохранить как блок" title="Сохранить как блок" onClick={onSave}><Icon name="save" size={17}/></button>
+    <button type="button" disabled={disabled} aria-label="Удалить выделение" title="Удалить" className="danger" onClick={onDelete}><Icon name="trash" size={17}/></button>
+  </div>;
+}
+function Modal({ title, children, close, wide=false, docked=false }) {
+  const panel=useRef(null),previous=useRef(typeof document==='undefined'?null:document.activeElement);
+  const [desktop,setDesktop]=useState(()=>typeof window!=='undefined'&&window.matchMedia('(min-width:901px)').matches);
+  const floating=docked&&desktop;
+  useEffect(()=>{if(!docked)return;const media=window.matchMedia('(min-width:901px)'),update=()=>setDesktop(media.matches);media.addEventListener('change',update);return()=>media.removeEventListener('change',update);},[docked]);
+  useEffect(()=>{
+    const before=document.body.style.overflow;if(!floating)document.body.style.overflow='hidden';panel.current?.focus();
+    const key=e=>{
+      if(e.key==='Escape'){if(e.target.closest?.('[role=listbox], [aria-haspopup=listbox][aria-expanded=true]'))return;e.stopPropagation();close();return;}
+      if(e.key!=='Tab'||floating)return;
+      const list=[...panel.current.querySelectorAll('button:not(:disabled),input,select,textarea,[tabindex="0"]')].filter(n=>n.offsetParent!==null);
+      if(!list.length){e.preventDefault();return;}
+      if(e.shiftKey&&(document.activeElement===list[0]||document.activeElement===panel.current)){e.preventDefault();list.at(-1).focus();}
+      else if(!e.shiftKey&&document.activeElement===list.at(-1)){e.preventDefault();list[0].focus();}
+    };
+    document.addEventListener('keydown',key,true);
+    return()=>{if(!floating)document.body.style.overflow=before;document.removeEventListener('keydown',key,true);if(previous.current?.isConnected)previous.current.focus();};
+  },[floating]);
+  return <div className={`modal-backdrop ${docked?'add-object-layer':''} ${floating?'floating':''}`} onPointerDown={e=>{if(!floating&&e.target===e.currentTarget)close();}}><section className={`modal ${wide?'wide':''} ${docked?'add-object-panel':''}`} role="dialog" aria-modal={floating?undefined:true} aria-label={title} tabIndex={-1} ref={panel}><header><h2>{title}</h2><button className="icon-btn" aria-label="Закрыть окно" onClick={close}><Icon name="close"/></button></header><div className="modal-content">{children}</div></section></div>;
+}
+function PlacementSettings({object:o,onChange,hall}) {
+  return <Disclosure title="Другие настройки">
+    <Toggle label="Закрепить положение" hint="Не перемещается на схеме" checked={o.pinned} onChange={pinned=>onChange({pinned})}/>
+    <Toggle label="Не продавать" hint="Не входит в доступную вместимость" checked={o.disabled} onChange={disabled=>onChange({disabled})}/>
+    {tableType(o)&&<NumberField label="Зазор до кресла, м" value={Number(((o.chairOffset-CHAIR/2)/SCALE).toFixed(3))} min={0} max={2.775} step={.025} onChange={v=>v!=null&&onChange({chairOffset:v*SCALE+CHAIR/2})}/>}
+    <div className="field-pair"><NumberField label="X, м" value={Number((o.x/SCALE).toFixed(2))} min={0} max={hall.room.w/SCALE} step={.1} onChange={v=>v!=null&&onChange({x:v*SCALE})}/><NumberField label="Y, м" value={Number((o.y/SCALE).toFixed(2))} min={0} max={hall.room.h/SCALE} step={.1} onChange={v=>v!=null&&onChange({y:v*SCALE})}/></div>
+    <NumberField label="Поворот объекта, °" value={Math.round(o.rotation)} min={-180} max={180} step={5} onChange={v=>v!=null&&onChange({rotation:v})}/>
+  </Disclosure>;
+}
+function RowsForm({hall,initialObject,availableSpot,onAdd,onDraw}) {
+  const [object,setObject]=useState(()=>initialObject?clone(initialObject):makeObject('rows',0,0));
+  const rowForm={one:'ряд',few:'ряда',many:'рядов',other:'ряда'}[new Intl.PluralRules('ru').select(object.rowCount)];
+  const b=bounds(object),aisle=object.aisle,aisleX=aisle==='center'?-object.aisleWidth/2:aisle==='left'?-object.w/2+18:object.w/2-18-object.aisleWidth;
+  const patch=change=>setObject(updateObject(object,change));
+  return <form className="rows-composer" onSubmit={e=>{e.preventDefault();if(!object.name.trim()||object.seats.length>2000)return;const configured={...object,name:object.name.trim()};onAdd([initialObject?configured:{...configured,...availableSpot(configured)}]);}}>
+    <div className="rows-composer-settings"><div className="rows-composer-fields">
+      <Field label="Название блока"><input aria-label="Название блока рядов" required maxLength={120} value={object.name} onChange={e=>patch({name:e.target.value})}/></Field>
+      <div className="field-pair"><NumberField label="Количество рядов" value={object.rowCount} min={1} max={100} onChange={v=>v!=null&&patch({rowCount:v})}/><NumberField label="Мест в каждом ряду" value={object.seatsPerRow} min={1} max={40} onChange={v=>v!=null&&patch({seatsPerRow:v})}/></div>
+      <Field label="Проход"><div className="row-aisle-options" role="group" aria-label="Положение прохода">{[['none','Без прохода'],['left','Слева'],['center','По центру'],['right','Справа']].map(([value,label])=><button type="button" key={value} aria-pressed={aisle===value} onClick={()=>patch({aisle:value})}>{label}</button>)}</div></Field>
+      {aisle!=='none'&&<NumberField label="Ширина прохода, м" value={Number((object.aisleWidth/SCALE).toFixed(2))} min={.5} max={4} step={.1} onChange={v=>v!=null&&patch({aisleWidth:v*SCALE})}/>}
+      <div className="field-pair"><NumberField label="Между рядами, м" value={Number((object.rowPitch/SCALE).toFixed(2))} min={.7} max={2.25} step={.05} onChange={v=>v!=null&&patch({rowPitch:v*SCALE})}/><NumberField label="Между местами, м" value={Number((object.seatPitch/SCALE).toFixed(2))} min={.55} max={1.6} step={.05} onChange={v=>v!=null&&patch({seatPitch:v*SCALE})}/></div>
+      <NumberField label="Изгиб рядов, м" value={Number((object.curvature/SCALE).toFixed(2))} min={-2.5} max={2.5} step={.05} onChange={v=>v!=null&&patch({curvature:v*SCALE})}/>
+      <Disclosure title="Нумерация"><div className="field-pair"><NumberField label="Первый ряд" value={object.firstRow} min={1} max={999} onChange={v=>v!=null&&patch({firstRow:v})}/><NumberField label="Первое место" value={object.firstSeat} min={1} max={999} onChange={v=>v!=null&&patch({firstSeat:v})}/></div><Field label="Направление мест"><span className="table-sale-select"><select aria-label="Направление мест" value={object.reverse?'reverse':'normal'} onChange={e=>patch({reverse:e.target.value==='reverse'})}><option value="normal">Слева направо</option><option value="reverse">Справа налево</option></select><Icon name="chevron" size={16}/></span></Field></Disclosure>
+      {initialObject&&<PlacementSettings object={object} onChange={patch} hall={hall}/>}
+    </div>{!initialObject&&<button type="button" className="btn full rows-draw-button" onClick={()=>onDraw(object)}><Icon name="cursor" size={16}/>Нарисовать область</button>}<button className="btn primary full" type="submit" disabled={!object.name.trim()||object.seats.length>2000}><Icon name={initialObject?'check':'plus'} size={17}/>{initialObject?'Сохранить изменения':'Добавить на схему'}</button></div>
+    <div className="rows-composer-preview"><div className="rows-preview-heading"><span className="eyebrow">ПРЕДПРОСМОТР</span><b>{inventoryLabel({seat:object.seats.length})}</b></div><svg aria-label="Предпросмотр блока рядов" viewBox={`${b.x-45} ${b.y-70} ${b.w+90} ${b.h+110}`}>
+      <text className="rows-preview-front" x="0" y={b.y-42} textAnchor="middle">СЦЕНА / ПЕРЕД</text>
+      <Shape o={{...object,x:0,y:0,rotation:0}} hall={hall} preview/>
+      {aisle!=='none'&&<g className="rows-preview-aisle" pointerEvents="none"><rect x={aisleX} y={-object.h/2+8} width={object.aisleWidth} height={object.h-16} rx="3"/><text transform={`translate(${aisleX+object.aisleWidth/2} 0) rotate(-90)`} textAnchor="middle">ПРОХОД</text></g>}
+    </svg><p role="status">{object.seats.length>2000?'Не более 2 000 мест в схеме':`${object.rowCount} ${rowForm} · ${(object.w/SCALE).toFixed(2)} × ${(object.h/SCALE).toFixed(2)} м`}</p></div>
+  </form>;
+}
+function AddForm({ type, preset, hall, onAdd, availableSpot, onDraw }) {
+  const [capacity,setCapacity]=useState(null),[name,setName]=useState(preset?.name??(type==='standing'?'Платная зона':TYPES[type]));
+  const options={name,capacity,...(preset?{w:preset.w,h:preset.h,color:preset.color}:{} )};
+  for(const key of Object.keys(options))if(options[key]===undefined)delete options[key];
+  const sample=makeObject(type,0,0,options),b=bounds(sample);
+  const submit=e=>{e.preventDefault();const object=makeObject(type,0,0,{...options,name:name.trim()});Object.assign(object,type==='entrance'?{x:hall.room.w/2,y:hall.room.h-object.h/2}:availableSpot(object));onAdd([object]);};
+  return <form onSubmit={submit} className="add-form"><div className="add-config"><p className="modal-intro">{type==='standing'?'Число входных билетов не зависит от размера зоны.':'Ориентир на схеме. Не участвует в продаже билетов.'}</p>
+    <Field label="Название нового объекта"><input aria-label="Название нового объекта" required maxLength={120} value={name} onChange={e=>setName(e.target.value)}/></Field>
+
+    {type==='standing'&&<NumberField label="Количество входных билетов" value={capacity} onChange={setCapacity} min={1} max={100000} hint="Можно назначить вместимость позже"/>}
+    {type==='standing'&&<button type="button" className="draw-option" onClick={()=>onDraw(type)}><Icon name="cursor" size={19}/><span><b>Нарисовать область</b><small>Создать зону нужной формы</small></span><Icon name="arrow" size={16}/></button>}
+    <div className="modal-actions"><button className="btn primary" type="submit" disabled={!name.trim()}><Icon name="plus" size={17}/>Добавить на схему</button></div>
+    </div><div className="object-preview"><span className="eyebrow">ПРЕДПРОСМОТР</span><svg viewBox={`${b.x-45} ${b.y-45} ${b.w+90} ${b.h+90}`}><Shape o={sample} hall={hall}/></svg><div className="preview-caption"><b>{type==='standing'?`${capacity??'—'} входных билетов`:name}</b><span>Расположение и размер можно изменить на схеме</span></div></div></form>;
+}
+
+function NameForm({label,initialName,button,onSubmit}){const [name,setName]=useState(initialName),[busy,setBusy]=useState(false);return <form onSubmit={async e=>{e.preventDefault();if(busy)return;setBusy(true);try{await onSubmit(name.trim());}finally{setBusy(false);}}}><Field label={label}><input required maxLength={120} value={name} onChange={e=>setName(e.target.value)}/></Field><div className="modal-actions"><button className="btn primary" disabled={!name.trim()||busy}>{busy?'Сохраняем…':button}</button></div></form>;}
+function LibraryManage({item,onSave,onArchive}){return <><NameForm label="Название зала" initialName={item.hall.name} button="Сохранить название" onSubmit={onSave}/><div className="panel-divider"/><Btn icon="folder" onClick={onArchive}>{item.archived?'Восстановить из архива':'Переместить в архив'}</Btn><p className="fineprint">Независимые копии в других схемах сохранятся.</p></>;}
+function CategoryColorPicker({value,onChange}) {
+  const [hex,setHex]=useState(value);
+  useEffect(()=>setHex(value),[value]);
+  const chooseColor=c=>{setHex(c);onChange(c);};
+  return <fieldset className="category-color-field"><legend>Цвет на схеме</legend><div className="color-palette" role="group" aria-label="Готовые цвета">{COLORS.map(c=><button type="button" key={c} aria-label={`Цвет ${c}`} title={c} aria-pressed={value.toLowerCase()===c} style={{background:c}} onClick={()=>chooseColor(c)}>{value.toLowerCase()===c&&<Icon name="check" size={17}/>}</button>)}</div><div className="custom-category-color"><label><input type="color" aria-label="Выбрать свой цвет" value={value} onChange={e=>chooseColor(e.target.value)}/><span>Свой цвет</span></label><label><span>HEX</span><input aria-label="Цвет категории HEX" type="text" value={hex} required pattern="#[0-9a-fA-F]{6}" maxLength={7} spellCheck={false} placeholder="#7845ed" onChange={e=>{const next=e.target.value;setHex(next);if(/^#[0-9a-fA-F]{6}$/.test(next))onChange(next.toLowerCase());}}/></label></div><p className="fineprint">Цвет назначенных мест изменится после сохранения категории.</p></fieldset>;
+}
+function CategoryForm({initial,defaultUnit='seat',currency,onSubmit,onDelete,unitLocked=false,assignment=null}){const [name,setName]=useState(initial?.name??''),[price,setPrice]=useState(initial?.price??null),[unit,setUnit]=useState(initial?.unit??defaultUnit),[color,setColor]=useState(initial?.color??COLORS[0]),[active,setActive]=useState(initial?.active??true);
+  const quantity=assignment?Object.values(assignment).reduce((n,v)=>n+v,0):0;
+  const canAssign=!initial&&quantity>0&&active&&Object.entries(assignment).every(([key,n])=>!n||key===unit);
+  return <form onSubmit={e=>{e.preventDefault();onSubmit({...initial,id:initial?.id??uid(),name:name.trim(),price,unit,color,active},canAssign);}}><Field label="Название категории"><input required maxLength={60} value={name} placeholder="Например, VIP" onChange={e=>setName(e.target.value)}/></Field><div className="field-pair"><Field label={`Цена, ${currency}`}><input aria-label="Цена категории" type="number" step="0.01" min="0" max="20000000" value={price??''} onChange={e=>setPrice(e.target.value===''?null:Number(e.target.value))} placeholder="Не задана"/></Field><Field label="Единица продажи"><select value={unit} disabled={unitLocked} onChange={e=>setUnit(e.target.value)}><option value="seat">За место</option><option value="table">За стол</option><option value="entry">За вход</option></select></Field></div><CategoryColorPicker value={color} onChange={setColor}/><Toggle label="Категория в продаже" checked={active} onChange={setActive}/>{!initial&&quantity>0&&<p className="fineprint" role="status">{canAssign?`Категория будет назначена: ${inventoryLabel(assignment)}. Недоступные места сохранят свои настройки.`:'Категория будет создана без назначения. Для назначения выберите объекты с одной подходящей единицей продажи и включите категорию.'}</p>}{initial&&<p className="fineprint">Изменения категории обновят цену и цвет всех связанных мест, столов или входных билетов.</p>}<div className="modal-actions">{onDelete&&<Btn icon="trash" variant="danger" onClick={onDelete}>Удалить</Btn>}<button className="btn primary" disabled={!name.trim()}>{initial?'Сохранить категорию':canAssign?'Создать и назначить':'Создать категорию'}</button></div></form>;}
+function ReassignForm({hall,target,onSubmit}){const [id,setId]=useState('');return <form onSubmit={e=>{e.preventDefault();onSubmit(id||null);}}><p className="confirm-copy">Категория «{target.name}» будет удалена. Выберите замену для всех связанных объектов, рядов и кресел.</p><Field label="Заменить категорией"><select value={id} onChange={e=>setId(e.target.value)}><option value="">Оставить без цены</option>{hall.categories.filter(c=>c.id!==target.id&&c.unit===target.unit).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></Field><div className="modal-actions"><button className="btn danger">Переназначить и удалить</button></div></form>;}
+
+
+
+function OnePrice({hall,onSubmit}){
+  const [price,setPrice]=useState(''),[unit,setUnit]=useState('seat');
+  const ids=hall.objects.filter(o=>unitOf(o)===unit).map(o=>o.id),report=selectionPricing(hall,ids);
+  return <form onSubmit={e=>{e.preventDefault();onSubmit(Number(price),unit);}}>
+    <p className="modal-intro">Единая цена заменит категории всех доступных объектов выбранного типа. Недоступные места сохранят свои настройки.</p>
+    <Field label="Для каких объектов"><select value={unit} onChange={e=>setUnit(e.target.value)}><option value="seat">Все отдельные места</option><option value="table">Все столы целиком</option><option value="entry">Все входные билеты</option></select></Field>
+    <Field label={`Цена ${units[unit]}, ${hall.currency}`}><input type="number" step="0.01" required min="0" max="20000000" value={price} onChange={e=>setPrice(e.target.value)}/></Field>
+    <p className="fineprint" role="status">{report.quantity?`Будет назначено: ${inventoryLabel(report.counts)}. Можно отменить.`:'Нет доступных объектов этого типа.'}</p>
+    <div className="modal-actions"><button className="btn primary" disabled={!report.quantity||price===''}>Назначить единую цену</button></div>
+  </form>;
+}

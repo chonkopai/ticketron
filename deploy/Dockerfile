@@ -1,0 +1,45 @@
+# Build from the repository root (the compose file sets context to ..):
+#   docker build -f deploy/Dockerfile .
+FROM node:24-bookworm-slim AS build
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates openssl \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g pnpm@11.19.0
+
+WORKDIR /app
+COPY . .
+
+ARG SITE_DOMAIN
+ARG TELEGRAM_BOT_USERNAME
+ARG NEXT_PUBLIC_GOOGLE_CLIENT_ID
+ARG NEXT_PUBLIC_YANDEX_MAPS_API_KEY
+ARG NEXT_PUBLIC_YANDEX_SUGGEST_API_KEY
+ARG NEXT_PUBLIC_YANDEX_GEOCODER_ENABLED=false
+ARG NEXT_PUBLIC_GOOGLE_MAPS_EMBED_API_KEY
+ARG NEXT_PUBLIC_IP_GEOLOCATION_ENABLED=false
+ENV NEXT_PUBLIC_API_URL=https://${SITE_DOMAIN}
+ENV NEXT_PUBLIC_TELEGRAM_BOT_USERNAME=${TELEGRAM_BOT_USERNAME}
+ENV NEXT_PUBLIC_YANDEX_MAPS_API_KEY=${NEXT_PUBLIC_YANDEX_MAPS_API_KEY}
+ENV NEXT_PUBLIC_YANDEX_SUGGEST_API_KEY=${NEXT_PUBLIC_YANDEX_SUGGEST_API_KEY}
+ENV NEXT_PUBLIC_YANDEX_GEOCODER_ENABLED=${NEXT_PUBLIC_YANDEX_GEOCODER_ENABLED}
+ENV NEXT_PUBLIC_GOOGLE_MAPS_EMBED_API_KEY=${NEXT_PUBLIC_GOOGLE_MAPS_EMBED_API_KEY}
+ENV NEXT_PUBLIC_IP_GEOLOCATION_ENABLED=${NEXT_PUBLIC_IP_GEOLOCATION_ENABLED}
+ENV API_INTERNAL_URL=http://api:3001
+ENV BOT_INTERNAL_URL=http://bot:3002
+
+RUN test -n "$SITE_DOMAIN" && test -n "$TELEGRAM_BOT_USERNAME" \
+    && pnpm install --frozen-lockfile \
+    && if [ -z "$NEXT_PUBLIC_GOOGLE_CLIENT_ID" ]; then unset NEXT_PUBLIC_GOOGLE_CLIENT_ID; else export NEXT_PUBLIC_GOOGLE_CLIENT_ID; fi \
+    && DATABASE_URL=postgresql://build:build@localhost:5432/build?schema=public pnpm build \
+    && rm -rf apps/web/.next/cache
+
+FROM node:24-bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates openssl ffmpeg fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /data/posters /data/draft-media /data/private-support \
+    && chown node:node /data/posters /data/draft-media /data/private-support
+
+WORKDIR /app
+COPY --from=build --chown=node:node /app /app
+USER node
+ENV NODE_ENV=production

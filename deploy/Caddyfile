@@ -1,0 +1,53 @@
+{$SITE_DOMAIN} {
+  encode zstd gzip
+  # For a staging site, uncomment to keep it out of search engines:
+  # header X-Robots-Tag "noindex, nofollow"
+
+  # Caddy is the public edge: it already replaces X-Forwarded-For/-Proto/-Host from the real peer
+  # (no trusted_proxies is configured). The two headers it would pass through are dropped here,
+  # so no client-supplied forwarding header ever reaches an upstream. See docs/deployment.md.
+  @telegram path /telegram/webhook
+  handle @telegram {
+    reverse_proxy bot:3002 {
+      header_up -X-Real-IP
+      header_up -Forwarded
+    }
+  }
+
+  @telegram_seats path /telegram/seats /telegram/seats/*
+  handle @telegram_seats {
+    reverse_proxy api:3001 {
+      header_up X-Forwarded-For {remote_host}
+      header_up -X-Real-IP
+      header_up -Forwarded
+    }
+  }
+
+  handle {
+    reverse_proxy web:3000 {
+      header_up -X-Real-IP
+      header_up -Forwarded
+    }
+  }
+}
+
+# Staff console host, e.g. admin.example.com. Only staff routes are served here.
+{$ADMIN_DOMAIN} {
+  encode zstd gzip
+  header {
+    X-Robots-Tag "noindex, nofollow"
+    Referrer-Policy "no-referrer"
+    X-Content-Type-Options "nosniff"
+  }
+  # Only staff pages, their BFF and static bundles are exposed on this host.
+  @staff path / /admin /admin/* /staff-api/* /_next/* /favicon.ico
+  handle @staff {
+    reverse_proxy web:3000 {
+      header_up -X-Real-IP
+      header_up -Forwarded
+    }
+  }
+  handle {
+    respond "Not found" 404
+  }
+}

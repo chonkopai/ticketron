@@ -1,0 +1,27 @@
+/* Hall plan look shared by the event page and the Telegram seat picker (prototype: output/event-redesign). */
+.guest-hall-floor { fill: color-mix(in srgb, var(--tk-surface, #ffffff) 62%, transparent); stroke: color-mix(in srgb, var(--tk-text, #151c27) 32%, transparent); }
+.guest-hall-stage { fill: var(--tk-accent-soft, #f1ebfe); stroke: color-mix(in srgb, var(--tk-accent, #6320ee) 30%, transparent); }
+.guest-hall-entrance { fill: color-mix(in srgb, var(--tk-accent, #6320ee) 8%, transparent); stroke: var(--tk-accent, #6320ee); }
+.guest-hall-label { fill: var(--tk-muted, #625d70); font-weight: 600; letter-spacing: .04em; }
+.guest-seat { cursor: pointer; transition: transform .15s, opacity .2s; transform-box: fill-box; transform-origin: center; }
+.guest-seat:hover { transform: scale(1.35); }
+.guest-seat.is-off { cursor: not-allowed; }
+.guest-seat.is-off:hover { transform: none; }
+.guest-seat.is-on { animation: guest-seat-pop .4s cubic-bezier(.3, 1.6, .5, 1); }
+.guest-seat-ring { stroke: var(--tk-primary, #6320ee); opacity: 0; transform-box: fill-box; transform-origin: center; animation: guest-seat-ring .6s ease-out; }
+.guest-seat-focus { stroke: var(--tk-accent, #6320ee); opacity: 0; }
+.guest-seat:focus-visible .guest-seat-focus { opacity: 1; }
+@keyframes guest-seat-pop { 0% { transform: scale(1); } 40% { transform: scale(1.45); } 100% { transform: scale(1); } }
+@keyframes guest-seat-ring { 0% { opacity: .75; transform: scale(1); } 100% { opacity: 0; transform: scale(2.3); } }
+.guest-table, .guest-zone { transition: opacity .2s; }
+.guest-table .guest-shape, .guest-zone .guest-shape { transition: fill .2s, fill-opacity .2s, stroke-width .2s; }
+.guest-table:hover .guest-shape, .guest-zone:hover .guest-shape { filter: brightness(1.05); }
+.guest-table.is-on, .guest-zone.is-on { animation: guest-shape-pop .35s cubic-bezier(.3, 1.4, .5, 1); transform-box: fill-box; }
+@keyframes guest-shape-pop { 50% { opacity: .75; } }
+.guest-table:focus-visible .guest-shape, .guest-zone:focus-visible .guest-shape { stroke: var(--tk-accent, #6320ee); stroke-width: .1; }
+.guest-hall-dimmed .guest-dim { opacity: .22; }
+.guest-hall-tip { position: fixed; z-index: 130; pointer-events: none; padding: 8px 11px; border-radius: 12px; font-size: 12.5px; line-height: 1.35; background: #151c27; color: #fff; box-shadow: 0 10px 24px -8px rgb(0 0 0 / .4); animation: guest-tip .12s ease both; }
+.guest-hall-tip b { display: block; font-weight: 600; }
+.guest-hall-tip span { color: #c9c3d6; }
+@keyframes guest-tip { from { opacity: 0; transform: translateY(4px); } }
+@media (prefers-reduced-motion: reduce) { .guest-seat, .guest-seat.is-on, .guest-seat-ring, .guest-table.is-on, .guest-zone.is-on { animation: none; transition: none; } }

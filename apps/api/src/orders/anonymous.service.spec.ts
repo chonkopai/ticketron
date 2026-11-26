@@ -1,0 +1,330 @@
+import "../test-support/require-test-database.js";
+import { randomUUID } from "node:crypto";
+import { prisma } from "@event-platform/database";
+import { quickCartSchema, quickTicketSchema, quickTableSchema } from "@event-platform/shared-types";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { DomainEventsService } from "../domain-events/domain-events.service.js";
+import { TicketTypesService } from "../ticket-types/ticket-types.service.js";
+import { TablesService } from "../tables/tables.service.js";
+import { BookingService } from "../booking/booking.service.js";
+import { CheckoutEmailService } from "../booking/checkout-email.service.js";
+import { DevelopmentPaymentProvider } from "../booking/payment-provider.js";
+import { PaymentService } from "../payments/payment.service.js";
+import { AnonymousService, secretHash } from "./anonymous.service.js";
+import { linkGuestPurchases } from "./automatic-purchase-link.js";
+import { QuickDeliveryService, TelegramDeliveryRejected } from "./quick-delivery.service.js";
+import { TicketsService } from "../tickets/tickets.service.js";
+import { orderTicketDocuments } from "./ticket-document.js";
+import { approveEventsForTest } from "../test-support/approve-event.js";
+
+const organizerId = randomUUID(), userId = randomUUID(), otherId = randomUUID(), eventId = randomUUID(), layoutId = randomUUID();
+const telegramId = BigInt(Date.now()) * 1000n + 39n;
+const clock = { value: new Date("2035-01-01T00:00:00Z"), now() { return new Date(this.value); } };
+const events = new DomainEventsService();
+const types = new TicketTypesService(prisma, events);
+const tables = new TablesService(prisma, events, { holdTtlSeconds: 600, cleanupIntervalSeconds: 60 }, clock);
+const provider = new DevelopmentPaymentProvider("http://localhost:3000", "test-signed-secret", 300, () => clock.now());
+const payments = new PaymentService(prisma, provider, events, clock);
+const booking = new BookingService(prisma, types, tables, events, { checkoutTtlSeconds: 900, cleanupIntervalSeconds: 60 }, clock, payments, new CheckoutEmailService({} as never));
+const quick = new AnonymousService(prisma, booking, payments, events, clock, { botUsername: "test_bot", sessionSeconds: 600, accessSeconds: 3600 });
+const sessions: string[] = [], orders: string[] = [];
+const tickets = new TicketsService(prisma, events, { isConfigured: () => false, generate: async () => { throw new Error("not configured"); } });
+
+beforeAll(async () => {
+  await prisma.user.createMany({ data: [{ id: organizerId, role: "organizer", telegramId: telegramId + 1n }, { id: userId, telegramId }, { id: otherId, telegramId: telegramId + 2n }] });
+  await prisma.event.create({ data: { id: eventId, organizerId, title: "Anonymous acceptance", date: new Date("2035-02-01T00:00:00Z"), time: new Date("1970-01-01T18:00:00Z"), timezone: "Asia/Almaty", address: "Almaty", status: "published", paymentMode: "full_payment", depositTerms: "Deposit terms", cancellationTerms: "Cancellation terms", showFullAmountForDeposit: false } });
+  await prisma.venueLayout.create({ data: { id: layoutId, eventId, templateName: "Quick test", layoutJson: { version: 1, canvas: { width: 800, height: 600 }, tables: [] } } });
+  await approveEventsForTest(prisma, eventId);
+});
+afterAll(async () => {
+  const rows = await prisma.anonymousCheckoutSession.findMany({ where: { id: { in: sessions } }, select: { orderId: true } });
+  orders.push(...rows.flatMap(r => r.orderId ? [r.orderId] : []));
+  await prisma.anonymousCheckoutSession.deleteMany({ where: { id: { in: sessions } } });
+  await prisma.order.deleteMany({ where: { id: { in: orders } } });
+  await prisma.event.delete({ where: { id: eventId } });
+  await prisma.auditLog.deleteMany({ where: { OR: [{ actorId: { in: [organizerId, userId, otherId] } }, { entityId: { in: orders } }] } });
+  await prisma.outboxEvent.deleteMany({ where: { aggregateId: { in: [...orders, ...sessions] } } });
+  await prisma.user.deleteMany({ where: { id: { in: [organizerId, userId, otherId] } } });
+});
+async function session(verified = true) {
+  const result = await quick.start("Guest");
+  const row = await prisma.anonymousCheckoutSession.findUniqueOrThrow({ where: { sessionHash: secretHash(result.sessionToken) } }); sessions.push(row.id);
+  if (verified) await quick.verify({ token: new URL(result.telegramUrl).searchParams.get("start")!.slice(2), telegramId: telegramId.toString(), chatId: telegramId.toString(), messageId: 11 });
+  return { ...result, id: row.id };
+}
+async function type(quantityTotal = 10) { const created = await types.create(organizerId, eventId, { name: randomUUID(), price: 100000, quantityTotal, status: "active" }); await approveEventsForTest(prisma, eventId); return created; }
+async function buy() {
+  const s = await session(), t = await type();
+  const input = { ticketTypeId: t.id, quantity: 1, termsAccepted: true as const };
+  const key = randomUUID();
+  const result = await quick.checkout(s.sessionToken, key, "ticket", input); orders.push(result.orderId);
+  return { s, t, key, input, result };
+}
+async function pay(orderId: string) {
+  const attempt = await prisma.payment.findFirstOrThrow({ where: { orderId } });
+  const signed = DevelopmentPaymentProvider.signWebhook({ eventId: randomUUID(), eventType: "payment.succeeded", providerPaymentId: attempt.providerPaymentId, orderId, amount: attempt.amount, currency: attempt.currency }, "test-signed-secret", Math.floor(clock.now().getTime() / 1000));
+  const event = provider.verifyWebhook({ rawBody: signed.rawBody, headers: signed.headers });
+  await booking.handlePaymentWebhook(event);
+  return event;
+}
+
+describe("anonymous checkout and claims (PostgreSQL)", () => {
+  it("allows a registered Telegram recipient with prior tickets to receive another free purchase without logging in", async () => {
+    const usersBefore = await prisma.user.count();
+    const prior = await buy(); await pay(prior.result.orderId);
+    const recipient = await session();
+    const freeType = await types.create(organizerId, eventId, { name: randomUUID(), price: 0, quantityTotal: 5, status: "active" });
+    await approveEventsForTest(prisma, eventId);
+    const key = randomUUID();
+    const input = { ticketTypeId: freeType.id, quantity: 2, termsAccepted: true as const };
+    const result = await quick.checkout(recipient.sessionToken, key, "ticket", input); orders.push(result.orderId);
+    expect((await quick.checkout(recipient.sessionToken, key, "ticket", input)).orderId).toBe(result.orderId);
+    expect(result.amountDue).toBe(0); expect(result.paymentLink).toBe("");
+    expect(await prisma.payment.count({ where: { orderId: result.orderId } })).toBe(0);
+    expect(await prisma.user.count()).toBe(usersBefore);
+    expect(await prisma.ticket.count({ where: { orderId: prior.result.orderId, status: "active" } })).toBe(1);
+    const status = await quick.status(recipient.accessToken);
+    expect(status).toMatchObject({ status: "paid", buyerName: "Guest", linked: false });
+    expect(status.tickets).toHaveLength(2);
+    expect(new Set(status.tickets.map(ticket => ticket.number)).size).toBe(2);
+    const receipt = await orderTicketDocuments(prisma, result.orderId);
+    expect(receipt.tickets.map(ticket => ticket.document.number).sort()).toEqual(status.tickets.map(ticket => ticket.number).sort());
+    expect(receipt.tickets.every(ticket => ticket.document.price === 0 && ticket.document.buyerName === "Guest")).toBe(true);
+  });
+  it("confirms an email-only free purchase immediately and queues ticket email only once", async () => {
+    const recipient = await session(false);
+    const email = `free-${randomUUID()}@example.test`;
+    await prisma.anonymousCheckoutSession.update({ where: { id: recipient.id }, data: { verifiedEmail: email } });
+    const freeType = await types.create(organizerId, eventId, { name: randomUUID(), price: 0, quantityTotal: 5, status: "active" });
+    await approveEventsForTest(prisma, eventId);
+    const input = { ticketTypeId: freeType.id, quantity: 1, termsAccepted: true as const, emailDelivery: { address: email } };
+    const key = randomUUID(), result = await quick.checkout(recipient.sessionToken, key, "ticket", input); orders.push(result.orderId);
+    await quick.checkout(recipient.sessionToken, key, "ticket", input);
+    expect((await quick.status(recipient.accessToken)).status).toBe("paid");
+    expect(await prisma.payment.count({ where: { orderId: result.orderId } })).toBe(0);
+    expect(await prisma.outboxEvent.count({ where: { aggregateId: result.orderId, eventType: "ticket.email_requested" } })).toBe(1);
+  });
+  it("settles an email-only full-price purchase once and links it only to its verified email identity", async () => {
+    const s = await session(false), t = await type();
+    const email = `quick-${randomUUID()}@example.test`;
+    await prisma.anonymousCheckoutSession.update({ where: { id: s.id }, data: { verifiedEmail: email } });
+    const input = { ticketTypeId: t.id, quantity: 1, termsAccepted: true as const, emailDelivery: { address: email } };
+    const key = randomUUID();
+    const result = await quick.checkout(s.sessionToken, key, "ticket", input);
+    orders.push(result.orderId);
+    expect(result.emailDelivery).toMatchObject({ address: email });
+    await expect(quick.checkout(s.sessionToken, key, "ticket", { ...input, emailDelivery: { address: "other@example.test" } })).rejects.toThrow();
+    expect((await prisma.order.findUniqueOrThrow({ where: { id: result.orderId } })).guestContact).toMatchObject({ channel: "email", email });
+    const callback = await pay(result.orderId);
+    await booking.handlePaymentWebhook(callback);
+    expect(await prisma.outboxEvent.count({ where: { aggregateId: result.orderId, eventType: "ticket.email_requested" } })).toBe(1);
+    expect((await quick.status(s.accessToken)).deliveryStatus).toBe("unavailable");
+    expect(await linkGuestPurchases(prisma, otherId)).toBe(0);
+    expect((await prisma.order.findUniqueOrThrow({ where: { id: result.orderId } })).buyerUserId).toBeNull();
+    await prisma.contactIdentity.create({ data: { userId, method: "email", normalizedIdentifier: email, verifiedAt: new Date() } });
+    expect(await linkGuestPurchases(prisma, userId, result.orderId)).toBe(1);
+    expect((await prisma.order.findUniqueOrThrow({ where: { id: result.orderId } })).buyerUserId).toBe(userId);
+    expect((await prisma.ticket.findFirstOrThrow({ where: { orderId: result.orderId } })).ownerUserId).toBe(userId);
+  });
+  it("does not create users, verifies recipients once and stores only hashes", async () => {
+    const before = await prisma.user.count();
+    const s = await session(false);
+    const token = new URL(s.telegramUrl).searchParams.get("start")!.slice(2);
+    await expect(quick.verify({ token, telegramId: telegramId.toString(), chatId: "1", messageId: 1 })).rejects.toThrow();
+    await quick.verify({ token, telegramId: telegramId.toString(), chatId: telegramId.toString(), messageId: 1 });
+    await expect(quick.verify({ token, telegramId: telegramId.toString(), chatId: telegramId.toString(), messageId: 1 })).rejects.toThrow();
+    const row = await prisma.anonymousCheckoutSession.findUniqueOrThrow({ where: { id: s.id } });
+    expect(JSON.stringify(row, (_, v) => typeof v === "bigint" ? v.toString() : v)).not.toContain(s.accessToken);
+    expect(await prisma.user.count()).toBe(before);
+  });
+  it("requires verification; rejects unknown fields and price/identity tampering", async () => {
+    const s = await session(false), t = await type();
+    const input = { ticketTypeId: t.id, quantity: 1, termsAccepted: true as const };
+    await expect(quick.checkout(s.sessionToken, randomUUID(), "ticket", input)).rejects.toThrow();
+    for (const field of ["price", "currency", "paymentMode", "buyerUserId", "telegramId"]) expect(quickTicketSchema.safeParse({ ...input, [field]: "forged" }).success).toBe(false);
+    expect(quickTableSchema.safeParse({ tableId: randomUUID(), termsAccepted: false }).success).toBe(false);
+  });
+  it("completes a signed full-price ticket purchase and preserves accepted prices and idempotency", async () => {
+    const { s, result, input, key } = await buy();
+    expect(result).toMatchObject({ amountDue: 100000, fullAmount: 100000, paymentMode: "full_payment" });
+    expect(result.paymentLink).toContain("/quick/status");
+    const order = await prisma.order.findUniqueOrThrow({ where: { id: result.orderId }, include: { tickets: true, deposit: true } });
+    expect(order.buyerUserId).toBeNull(); expect(order.tickets[0]?.ownerUserId).toBeNull(); expect(order.deposit).toBeNull();
+    expect((await quick.checkout(s.sessionToken, key, "ticket", input)).orderId).toBe(result.orderId);
+    await expect(quick.checkout(s.sessionToken, key, "ticket", { ...input, quantity: 2 })).rejects.toThrow();
+    const event = await pay(result.orderId);
+    await booking.handlePaymentWebhook(event);
+    const status = await quick.status(s.accessToken);
+    expect(status).toMatchObject({ status: "paid", fullAmount: 100000, deliveryStatus: "pending", event: { date: "2035-02-01", time: "18:00", timezone: "Asia/Almaty", }, tickets: [{ status: "active", seatLabel: null }] });
+    expect(JSON.stringify(status)).not.toMatch(/qrToken|chatId|telegramId|guestContact|unitFullAmount|holdToken/);
+    expect(await prisma.outboxEvent.count({ where: { aggregateId: result.orderId, eventType: "checkout.paid" } })).toBe(1);
+  });
+  it("recovers the same order and attempt after provider timeout", async () => {
+    const s = await session(), t = await type(), key = randomUUID();
+    const input = { ticketTypeId: t.id, quantity: 1, termsAccepted: true as const };
+    const spy = vi.spyOn(provider, "createPaymentLink").mockRejectedValueOnce(new Error("timeout"));
+    await expect(quick.checkout(s.sessionToken, key, "ticket", input)).rejects.toThrow();
+    spy.mockRestore();
+    const row = await prisma.anonymousCheckoutSession.findUniqueOrThrow({ where: { id: s.id } });
+    const result = await quick.checkout(s.sessionToken, key, "ticket", input);
+    expect(result.orderId).toBe(row.orderId);
+    expect(await prisma.payment.count({ where: { orderId: result.orderId } })).toBe(1);
+  });
+  it("20 competing anonymous requests reserve the last ticket exactly once", async () => {
+    const t = await type(1), ss = await Promise.all(Array.from({ length: 20 }, () => session()));
+    const results = await Promise.allSettled(ss.map(s => quick.checkout(s.sessionToken, randomUUID(), "ticket", { ticketTypeId: t.id, quantity: 1, termsAccepted: true })));
+    expect(results.filter(r => r.status === "fulfilled")).toHaveLength(1);
+    expect(await prisma.order.count({ where: { tickets: { some: { ticketTypeId: t.id } } } })).toBe(1);
+  });
+  it("concurrent identical keys produce one order, reservation and link event", async () => {
+    const s = await session(), t = await type(), key = randomUUID();
+    const results = await Promise.all(Array.from({ length: 8 }, () => quick.checkout(s.sessionToken, key, "ticket", { ticketTypeId: t.id, quantity: 1, termsAccepted: true })));
+    expect(new Set(results.map(r => r.orderId)).size).toBe(1);
+    expect(await prisma.ticketReservation.count({ where: { orderId: results[0]!.orderId } })).toBe(1);
+    const p = await prisma.payment.findFirstOrThrow({ where: { orderId: results[0]!.orderId } });
+    expect(await prisma.outboxEvent.count({ where: { aggregateId: p.id, eventType: "payment.link_created" } })).toBe(1);
+  });
+  it("table checkout holds and confirms using the same signed payment boundary", async () => {
+    const table = await tables.create(organizerId, layoutId, { number: 91, seats: 4, price: 400000, geometry: { x: 50, y: 50, width: 100, height: 100 } });
+    await approveEventsForTest(prisma, eventId);
+    const ss = await Promise.all([session(), session()]);
+    const results = await Promise.allSettled(ss.map(s => quick.checkout(s.sessionToken, randomUUID(), "table", { tableId: table.id, termsAccepted: true })));
+    const wins = results.filter(r => r.status === "fulfilled"); expect(wins).toHaveLength(1);
+    if (wins[0]?.status !== "fulfilled") throw new Error("missing winner");
+    await pay(wins[0].value.orderId);
+    expect(await prisma.table.findUnique({ where: { id: table.id } })).toMatchObject({ status: "booked" });
+    expect(await prisma.booking.findUnique({ where: { orderId: wins[0].value.orderId } })).toMatchObject({ status: "confirmed" });
+  });
+  it("pays for multiple zones and a whole table in one anonymous order", async () => {
+    const s = await session();
+    const first = await type(), second = await type();
+    const table = await tables.create(organizerId, layoutId, { number: 92, seats: 2, price: 200000, geometry: { x: 200, y: 50, width: 100, height: 100 } });
+    await approveEventsForTest(prisma, eventId);
+    const input = { eventId, tickets: [{ ticketTypeId: first.id, quantity: 1 }, { ticketTypeId: second.id, quantity: 2 }], tableId: table.id, seatIds: [], termsAccepted: true as const };
+    expect(quickCartSchema.safeParse(input).success).toBe(true);
+    const result = await quick.checkout(s.sessionToken, randomUUID(), "cart", input); orders.push(result.orderId);
+    expect(result).toMatchObject({ kind: "cart", amountDue: 500000 });
+    await pay(result.orderId);
+    expect(await quick.status(s.accessToken)).toMatchObject({ status: "paid", booking: { status: "confirmed" } });
+    expect(await prisma.payment.count({ where: { orderId: result.orderId } })).toBe(1);
+  });
+  it("isolates capability access, QR and Wallet to the order and enforces expiry", async () => {
+    const a = await buy(), b = await buy(); await pay(a.result.orderId);
+    await expect(quick.access(a.s.accessToken, b.result.orderId)).rejects.toThrow();
+    await expect(quick.status(a.result.orderId)).rejects.toThrow();
+    expect((await tickets.assetForAnonymousOrder(a.result.orderId, a.result.ticketIds[0]!, false)).subarray(1, 4).toString()).toBe("PNG");
+    await expect(tickets.assetForAnonymousOrder(a.result.orderId, b.result.ticketIds[0]!, false)).rejects.toThrow();
+    await expect(tickets.assetForAnonymousOrder(a.result.orderId, a.result.ticketIds[0]!, true)).rejects.toThrow();
+    await prisma.anonymousCheckoutSession.update({ where: { id: a.s.id }, data: { accessExpiresAt: clock.now() } });
+    // Past the issue TTL the capability lives on until a week after the event ends.
+    expect((await quick.status(a.s.accessToken)).orderId).toBe(a.result.orderId);
+    const saved = clock.value;
+    clock.value = new Date("2035-02-09T00:00:00Z");
+    try { await expect(quick.status(a.s.accessToken)).rejects.toThrow(); }
+    finally { clock.value = saved; }
+  });
+  it("keeps quick access for an event more than 30 days ahead and ends it a week after the event", async () => {
+    const a = await buy(); await pay(a.result.orderId);
+    const saved = clock.value;
+    try {
+      clock.value = new Date("2035-01-31T00:00:00Z"); // 30 days after purchase, event on 2035-02-01
+      await prisma.anonymousCheckoutSession.update({ where: { id: a.s.id }, data: { accessExpiresAt: new Date("2035-01-01T01:00:00Z") } });
+      expect((await quick.status(a.s.accessToken)).status).toBe("paid");
+      clock.value = new Date("2035-02-08T11:00:00Z"); // event start 2035-02-01T13:00Z (18:00 Almaty) + 7 days not reached yet
+      expect((await quick.status(a.s.accessToken)).status).toBe("paid");
+      clock.value = new Date("2035-02-08T13:00:00Z");
+      await expect(quick.status(a.s.accessToken)).rejects.toThrow();
+    } finally { clock.value = saved; }
+  });
+  it("rolls back checkout and inventory when the atomic session result cannot be committed", async () => {
+    const s = await session(), t = await type();
+    const spy = vi.spyOn(events, "append").mockRejectedValueOnce(new Error("outbox failure"));
+    await expect(quick.checkout(s.sessionToken, randomUUID(), "ticket", { ticketTypeId: t.id, quantity: 1, termsAccepted: true })).rejects.toThrow(); spy.mockRestore();
+    expect(await prisma.order.count({ where: { tickets: { some: { ticketTypeId: t.id } } } })).toBe(0);
+    expect(await prisma.ticketReservation.count({ where: { ticketTypeId: t.id } })).toBe(0);
+  });
+  it("delivery consumes committed paid outbox and retries the same Telegram message", async () => {
+    const { s, result } = await buy(); await pay(result.orderId);
+    const worker = new QuickDeliveryService(prisma, clock);
+    const send = vi.fn(async () => undefined);
+    await worker.tick(send, [s.id]); const count = send.mock.calls.length;
+    await worker.tick(send, [s.id]); expect(send.mock.calls.length).toBe(count);
+    expect(await prisma.anonymousCheckoutSession.findUnique({ where: { id: s.id } })).toMatchObject({ deliveredAt: clock.now() });
+    expect(await quick.status(s.accessToken)).toMatchObject({ deliveryStatus: "confirmed" });
+    expect(await prisma.outboxEvent.count({ where: { aggregateId: result.orderId, eventType: "anonymous.delivery_completed" } })).toBe(1);
+  });
+  it("organizer purchases include anonymous contacts only for their own event", async () => {
+    const { result } = await buy();
+    const list = await quick.purchases(organizerId, eventId, 1);
+    expect(JSON.stringify(list)).toContain(result.orderId);
+    await expect(quick.purchases(otherId, eventId, 1)).rejects.toThrow();
+    expect(JSON.stringify(list)).not.toMatch(/qrToken|accessHash|claimHash|holdToken/);
+  });
+  it("free full-payment orders settle internally without a Payment or Deposit", async () => {
+    await prisma.event.update({ where: { id: eventId }, data: { paymentMode: "full_payment" } });
+    await approveEventsForTest(prisma, eventId);
+    const s = await session(); const t = await types.create(organizerId, eventId, { name: randomUUID(), price: 0, quantityTotal: 2, status: "active" }); await approveEventsForTest(prisma, eventId);
+    const result = await quick.checkout(s.sessionToken, randomUUID(), "ticket", { ticketTypeId: t.id, quantity: 1, termsAccepted: true });
+    expect(await quick.status(s.accessToken)).toMatchObject({ status: "paid", amountDue: 0, deposit: null });
+    expect(await prisma.payment.count({ where: { orderId: result.orderId } })).toBe(0);
+    await prisma.event.update({ where: { id: eventId }, data: { paymentMode: "full_payment" } });
+    await approveEventsForTest(prisma, eventId);
+  });
+  it("expires pending anonymous inventory on access and rejects expired verification", async () => {
+    const { s, result, t } = await buy();
+    await prisma.order.update({ where: { id: result.orderId }, data: { expiresAt: clock.now() } });
+    expect(await quick.status(s.accessToken)).toMatchObject({ status: "expired" });
+    expect(await prisma.ticketReservation.count({ where: { ticketTypeId: t.id, status: "active" } })).toBe(0);
+    const fresh = await session(false);
+    await prisma.anonymousCheckoutSession.update({ where: { id: fresh.id }, data: { expiresAt: clock.now() } });
+    await expect(quick.verify({ token: new URL(fresh.telegramUrl).searchParams.get("start")!.slice(2), telegramId: telegramId.toString(), chatId: telegramId.toString(), messageId: 11 })).rejects.toThrow();
+  });
+  it("charges a nonzero full amount through the signed provider without a deposit", async () => {
+    await prisma.event.update({ where: { id: eventId }, data: { paymentMode: "full_payment" } });
+    await approveEventsForTest(prisma, eventId);
+    const { s, result } = await buy();
+    expect(result).toMatchObject({ amountDue: 100000, paymentMode: "full_payment", fullAmount: 100000 });
+    await pay(result.orderId);
+    expect(await quick.status(s.accessToken)).toMatchObject({ status: "paid", deposit: null });
+    await prisma.event.update({ where: { id: eventId }, data: { paymentMode: "full_payment" } });
+    await approveEventsForTest(prisma, eventId);
+  });
+  it("posts a new receipt when the original message cannot be edited and still sends the QR photos", async () => {
+    const { s, result } = await buy(); await pay(result.orderId);
+    const worker = new QuickDeliveryService(prisma, clock);
+    const edit = vi.fn(async (_chat: string, _message: number, _text: string) => { throw new TelegramDeliveryRejected("DELIVERY_ANCHOR_UNAVAILABLE"); });
+    const photo = vi.fn(async (_chat: string, _image: Buffer, _caption: string) => undefined);
+    const receipt = vi.fn(async (_chat: string, _text: string) => 777);
+    expect(await worker.tick(edit, [s.id], photo, receipt)).toBe(1);
+    expect(receipt).toHaveBeenCalledTimes(1);
+    expect(photo).toHaveBeenCalledTimes(result.ticketIds.length);
+    expect(await prisma.anonymousCheckoutSession.findUnique({ where: { id: s.id } })).toMatchObject({ deliveryMessageId: 777, deliveredAt: clock.now() });
+  });
+  it("finishes delivery without photos only when the replacement receipt is rejected too", async () => {
+    const { s, result } = await buy(); await pay(result.orderId);
+    const worker = new QuickDeliveryService(prisma, clock);
+    const rejected = async () => { throw new TelegramDeliveryRejected("RECIPIENT_REJECTED"); };
+    const photo = vi.fn(async (_chat: string, _image: Buffer, _caption: string) => undefined);
+    await worker.tick(rejected, [s.id], photo, rejected);
+    expect(photo).not.toHaveBeenCalled();
+    expect(await prisma.anonymousCheckoutSession.findUnique({ where: { id: s.id } })).toMatchObject({ deliveredAt: null, deliveryFinishedAt: clock.now() });
+  });
+  it("prunes expired sessions that never produced an order and keeps purchase capabilities", async () => {
+    const stale = await session(false), fresh = await session(false), kept = await buy();
+    const old = new Date(clock.now().getTime() - 2 * 24 * 60 * 60_000);
+    await prisma.anonymousCheckoutSession.updateMany({ where: { id: { in: [stale.id, kept.s.id] } }, data: { expiresAt: old } });
+    expect(await quick.pruneExpiredSessions()).toBeGreaterThanOrEqual(1);
+    expect(await prisma.anonymousCheckoutSession.findUnique({ where: { id: stale.id } })).toBeNull();
+    expect(await prisma.anonymousCheckoutSession.findUnique({ where: { id: fresh.id } })).not.toBeNull();
+    expect(await prisma.anonymousCheckoutSession.findUnique({ where: { id: kept.s.id } })).not.toBeNull();
+  });
+  it("retries the same delivery after send success followed by a database failure", async () => {
+    const { s, result } = await buy(); await pay(result.orderId);
+    const worker = new QuickDeliveryService(prisma, clock), send = vi.fn(async (_chat: string, _message: number, _text: string) => undefined);
+    const spy = vi.spyOn(prisma, "$transaction").mockRejectedValueOnce(new Error("acknowledgement failed"));
+    await expect(worker.tick(send, [s.id])).rejects.toThrow(); spy.mockRestore();
+    await worker.tick(send, [s.id]);
+    expect(send).toHaveBeenCalledTimes(2); expect(send.mock.calls[0]).toEqual(send.mock.calls[1]);
+    expect(await prisma.outboxEvent.count({ where: { aggregateId: result.orderId, eventType: "anonymous.delivery_completed" } })).toBe(1);
+  });
+});

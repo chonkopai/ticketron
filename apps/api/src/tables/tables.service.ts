@@ -1,0 +1,577 @@
+import { publicEventWhere } from "../events/event-moderation-policy.js";
+import { assertEventRegistrationOpen } from "../events/event-registration-policy.js";
+import { historicalPaymentOption } from "../events/historical-deposit.js";
+import { assertCurrentResourceWrite,rejectDepositInput } from "../events/current-sale-policy.js";
+import { randomBytes, randomUUID } from "node:crypto";
+
+import {
+  BookingStatus,
+  EventPaymentMode,
+  EventStatus,
+  Prisma,
+  TableHoldStatus,
+  TableStatus,
+  type PrismaClient,
+  type Table,
+  type TableHold,
+} from "@event-platform/database";
+import {
+  tableGeometrySchema,
+  tableGeometryV2Schema,
+  venueLayoutSchemaAny,
+  type CreateTableRequest,
+  type ReleaseTableHoldResponse,
+  type PublicTable,
+  type UpdateTableRequest,
+  type VenueLayoutAny,
+  type VenueTable,
+} from "@event-platform/shared-types";
+import {
+  BadRequestException,
+  ConflictException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
+
+import { assertLegacyLayout } from "../venue/hall-editor.persistence.js";
+import { DATABASE_CLIENT } from "../auth/auth.constants.js";
+import { DomainEventsService } from "../domain-events/domain-events.service.js";
+import { TABLES_CLOCK, TABLES_CONFIG, type Clock, type TablesConfig } from "./tables.constants.js";
+import { presentTable } from "./tables.presenter.js";
+import { lockOrder, lockSeats, lockTable, lockTicketTypes, tryLockOrder, withStaleRetry, LOCKS_STALE } from "../booking/inventory-locks.js";
+import { releaseOrderInventory } from "../booking/order-release.service.js";
+import { supportedCurrency } from "../booking/supported-currency.js";
+
+type TableTransaction = Prisma.TransactionClient;
+
+@Injectable()
+export class TablesService {
+  constructor(
+    @Inject(DATABASE_CLIENT) private readonly database: PrismaClient,
+    @Inject(DomainEventsService) private readonly domainEvents: DomainEventsService,
+    @Inject(TABLES_CONFIG) private readonly config: TablesConfig,
+    @Inject(TABLES_CLOCK) private readonly clock: Clock,
+  ) {}
+
+  async create(organizerId: string, layoutId: string, input: CreateTableRequest): Promise<VenueTable> {
+    rejectDepositInput(input);
+    assertManagedStatus(input.status);
+    const id = randomUUID();
+    try {
+      const table = await this.database.$transaction(async (transaction) => {
+        await lockLayout(transaction, layoutId);
+        const layout = await this.findOwnedLayout(transaction, organizerId, layoutId);
+        assertLegacyLayout(layout.layoutJson);
+        if (layout.eventId) {
+          const event = await transaction.event.findUniqueOrThrow({ where: { id: layout.eventId } });
+          // Keep the legacy whole-table creation contract usable for already-published events;
+          // any numbered/per-seat structure must still be created while the event is a draft.
+          if (event.status !== EventStatus.draft && input.saleMode !== undefined) throw new ConflictException({ code: "VENUE_STRUCTURE_DRAFT_ONLY", message: "Venue structure can only be changed while the event is a draft" });
+          assertCurrentResourceWrite(event);
+        }
+        const currentJson = parseLayout(layout.layoutJson);
+        if (currentJson.tables.length >= 500) throw layoutLimit();
+        const nextGeometry = currentJson.version === 2
+          ? tableGeometryV2Schema.parse({ tableId: id, ...input.geometry })
+          : tableGeometrySchema.parse({ tableId: id, ...input.geometry });
+        const nextJson = venueLayoutSchemaAny.parse({
+          ...currentJson,
+          tables: [...currentJson.tables, nextGeometry],
+        });
+        const created = await transaction.table.create({
+          data: {
+            id,
+            venueLayoutId: layoutId,
+            number: input.number,
+            name: nullableText(input.name),
+            seats: input.seats,
+            price: input.price,
+            deposit: 0,
+            currency: supportedCurrency(input.currency),
+            description: nullableText(input.description),
+            typeLabel: nullableText(input.typeLabel),
+            shortDescription: nullableText(input.shortDescription),
+            saleMode: input.saleMode ?? "whole_table",
+            status: input.status ?? TableStatus.available,
+          },
+        });
+        await transaction.venueLayout.update({ where: { id: layoutId }, data: { layoutJson: nextJson, revision: { increment: 1 } } });
+        await this.record(transaction, organizerId, created.id, "table.created", {
+          layoutId,
+          changedFields: ["number", "name", "seats", "price", "currency", "description", "status", "geometry"],
+        });
+        return created;
+      });
+      return presentTable(table);
+    } catch (error) {
+      throw mapTableConstraint(error);
+    }
+  }
+
+  async list(organizerId: string, layoutId: string, query: { page: number; limit: number }) {
+    await this.findOwnedLayout(this.database, organizerId, layoutId);
+    const skip = (query.page - 1) * query.limit;
+    const [items, total] = await this.database.$transaction([
+      this.database.table.findMany({ where: { venueLayoutId: layoutId }, orderBy: [{ number: "asc" }, { id: "asc" }], skip, take: query.limit }),
+      this.database.table.count({ where: { venueLayoutId: layoutId } }),
+    ]);
+    const now = this.clock.now();
+    return { items: items.map((table) => presentTable(table, now)), page: query.page, limit: query.limit, total, hasNext: skip + items.length < total };
+  }
+
+  async get(organizerId: string, id: string): Promise<VenueTable> {
+    return presentTable(await this.findOwnedTable(this.database, organizerId, id), this.clock.now());
+  }
+
+  /** The clock readers use to treat lapsed holds as released (see presentTable). */
+  now(): Date {
+    return this.clock.now();
+  }
+
+  async publicForEvent(eventId: string, includeUnpublished = false): Promise<PublicTable[]> {
+    return (await this.publicForEvents([eventId], includeUnpublished)).get(eventId) ?? [];
+  }
+
+  /**
+   * Batched public tables for any number of events. Read-only: an active hold
+   * past its expiry is reported as available, exactly as the hold-cleanup
+   * worker (and checkout, which expires holds before selling) will treat it.
+   */
+  async publicForEvents(eventIds: string[], includeUnpublished = false): Promise<Map<string, PublicTable[]>> {
+    const result = new Map<string, PublicTable[]>(eventIds.map(id => [id, []]));
+    if (!eventIds.length) return result;
+    const layouts = await this.database.venueLayout.findMany({
+      where: { eventId: { in: eventIds }, ...(includeUnpublished ? {} : { event: publicEventWhere }) },
+      include: { event: true },
+    });
+    if (!layouts.length) return result;
+    const layoutById = new Map(layouts.map(layout => [layout.id, layout]));
+    const now = this.clock.now();
+    const tables = await this.database.table.findMany({ where: { venueLayoutId: { in: layouts.map(layout => layout.id) } }, include: { seatRecords: { include: { allocations: { where: { status: { in: ["active", "consumed"] } }, select: { id: true } } }, orderBy: { sortOrder: "asc" } } }, orderBy: [{ number: "asc" }, { id: "asc" }] });
+    for (const table of tables) {
+      const layout = layoutById.get(table.venueLayoutId)!;
+      const status = table.status === TableStatus.held && table.holdToken && table.holdExpiresAt && table.holdExpiresAt <= now ? TableStatus.available : table.status;
+      result.get(layout.eventId!)!.push(presentPublicTable(table, status, layout, includeUnpublished));
+    }
+    return result;
+  }
+
+  async update(organizerId: string, id: string, input: UpdateTableRequest): Promise<VenueTable> {
+    rejectDepositInput(input);
+    if (Object.keys(input).length === 0) throw new BadRequestException({ code: "TABLE_UPDATE_EMPTY", message: "At least one table field is required" });
+    assertManagedStatus(input.status);
+    try {
+      const updated = await this.database.$transaction(async (transaction) => {
+        await lockTable(transaction, id);
+        // Per-seat tables sync the ticket types their seats price: take those locks (sorted) before any write.
+        const lockedTypes = new Set<string>();
+        await lockMappedTicketTypes(transaction, id, lockedTypes);
+        let current = await this.findOwnedTable(transaction, organizerId, id);
+        await this.expireLocked(transaction, current, this.clock.now());
+        current = await this.findOwnedTable(transaction, organizerId, id);
+        if (current.status === TableStatus.held || current.status === TableStatus.booked) {
+          throw new ConflictException({ code: "TABLE_STATE_LOCKED", message: "A held or booked table cannot be edited" });
+        }
+        const layout = await transaction.venueLayout.findUniqueOrThrow({ where: { id: current.venueLayoutId } });
+        assertLegacyLayout(layout.layoutJson);
+        if (layout.eventId) {
+          const event = await transaction.event.findUniqueOrThrow({ where: { id: layout.eventId } });
+          if (event.status !== EventStatus.draft && (input.number !== undefined || input.seats !== undefined || input.saleMode !== undefined)) throw new ConflictException({ code: "VENUE_STRUCTURE_DRAFT_ONLY", message: "Seat numbering and sale mode can only change while the event is a draft" });
+          assertCurrentResourceWrite(event);
+        }
+        const data: Prisma.TableUpdateInput = {};
+        if (input.number !== undefined) data.number = input.number;
+        if (input.name !== undefined) data.name = nullableText(input.name);
+        if (input.seats !== undefined) data.seats = input.seats;
+        if (input.price !== undefined) data.price = input.price;
+        if (input.currency !== undefined) data.currency = supportedCurrency(input.currency);
+        if (input.description !== undefined) data.description = nullableText(input.description);
+        if (input.typeLabel !== undefined) data.typeLabel = nullableText(input.typeLabel);
+        if (input.shortDescription !== undefined) data.shortDescription = nullableText(input.shortDescription);
+        if (input.saleMode !== undefined) {
+          if (input.saleMode === "whole_table" && await transaction.seat.count({ where: { tableId: id } })) {
+            throw new ConflictException({ code: "TABLE_HAS_SEAT_INVENTORY", message: "A table with seats cannot switch to whole-table mode" });
+          }
+          data.saleMode = input.saleMode;
+        }
+        if (input.status !== undefined) data.status = input.status;
+        const table = await transaction.table.update({ where: { id }, data });
+        if (table.saleMode === "per_seat") {
+          const mapped = await transaction.seat.findMany({ where: { tableId: id, ticketTypeId: { not: null } }, select: { ticketTypeId: true } });
+          const ids = [...new Set(mapped.map((seat) => seat.ticketTypeId).filter((value): value is string => Boolean(value)))].sort();
+          await lockTicketTypes(transaction, ids.filter((ticketTypeId) => !lockedTypes.has(ticketTypeId))); // only if the mapping changed meanwhile
+          for (const ticketTypeId of ids) {
+            const ticketType = await transaction.ticketType.findUniqueOrThrow({ where: { id: ticketTypeId }, select: { quantitySold: true } });
+            await transaction.ticketType.update({ where: { id: ticketTypeId }, data: { price: table.price, deposit: table.deposit, currency: table.currency, quantityTotal: Math.max(table.seats, ticketType.quantitySold) } });
+          }
+        }
+        await this.record(transaction, organizerId, id, "table.updated", { layoutId: table.venueLayoutId, changedFields: Object.keys(input) });
+        return table;
+      });
+      return presentTable(updated);
+    } catch (error) {
+      throw mapTableConstraint(error);
+    }
+  }
+
+  async delete(organizerId: string, id: string): Promise<{ deleted: true; id: string }> {
+    await withStaleRetry(() => this.database.$transaction(async (transaction) => {
+      // Deleting a table cascades to its seats, so lock order is seat (sorted) → table: peek the seats, lock, re-check.
+      const peeked = await tableSeatIds(transaction, id);
+      await lockSeats(transaction, peeked);
+      await lockTable(transaction, id);
+      if ((await tableSeatIds(transaction, id)).some((seatId) => !peeked.includes(seatId))) return LOCKS_STALE;
+      const table = await this.findOwnedTable(transaction, organizerId, id);
+      const bookingCount = await transaction.booking.count({ where: { tableId: id } });
+      const holdCount = await transaction.tableHold.count({ where: { tableId: id } });
+      if (bookingCount > 0 || holdCount > 0 || table.status === TableStatus.held || table.status === TableStatus.booked) {
+        throw new ConflictException({ code: "TABLE_HAS_HISTORY", message: "A table with a hold or booking history cannot be deleted" });
+      }
+      const layout = await transaction.venueLayout.findUniqueOrThrow({ where: { id: table.venueLayoutId } });
+      assertLegacyLayout(layout.layoutJson);
+      if (layout.eventId) {
+        const event = await transaction.event.findUniqueOrThrow({ where: { id: layout.eventId } });
+        assertCurrentResourceWrite(event);
+        const numberedSeats = await transaction.seat.count({ where: { tableId: id } });
+        if (event.status !== EventStatus.draft && numberedSeats > 0) throw new ConflictException({ code: "VENUE_STRUCTURE_DRAFT_ONLY", message: "Venue structure can only be changed while the event is a draft" });
+      }
+      const layoutJson = parseLayout(layout.layoutJson);
+      await transaction.table.delete({ where: { id } });
+      await transaction.venueLayout.update({
+        where: { id: table.venueLayoutId },
+        data: { layoutJson: { ...layoutJson, tables: layoutJson.tables.filter((geometry) => geometry.tableId !== id) }, revision: { increment: 1 } },
+      });
+      await this.record(transaction, organizerId, id, "table.deleted", { layoutId: table.venueLayoutId });
+      return true as const;
+    }));
+    return { deleted: true, id };
+  }
+
+  async holdInTransaction(
+    transaction: TableTransaction,
+    tableId: string,
+    rawRequestKey: string,
+    now = this.clock.now(),
+  ): Promise<TableHold> {
+      const requestKey = validateRequestKey(rawRequestKey);
+      await lockTable(transaction, tableId);
+      const candidate = await transaction.table.findFirst({
+        where: { id: tableId, venueLayout: { event: publicEventWhere } },
+        include: { venueLayout: { include: { event: true } } },
+      });
+      if (!candidate?.venueLayout.event) throw tableNotFound();
+      assertEventRegistrationOpen(candidate.venueLayout.event, now);
+      let table: Table = candidate;
+      if (table.saleMode === "per_seat") throw new ConflictException({ code: "TABLE_REQUIRES_SEAT_SELECTION", message: "Select individual seats for this table" });
+      await this.expireLocked(transaction, table, now);
+      table = await transaction.table.findUniqueOrThrow({ where: { id: tableId } });
+
+      const prior = await transaction.tableHold.findUnique({
+        where: { tableId_requestKey: { tableId, requestKey } },
+      });
+      if (prior) {
+        if (prior.status === TableHoldStatus.active && prior.expiresAt > now && table.holdToken === prior.token) {
+          return prior;
+        }
+        throw new ConflictException({ code: "IDEMPOTENCY_KEY_REUSED", message: "This idempotency key already completed another hold attempt" });
+      }
+      if (table.status !== TableStatus.available) throw tableUnavailable();
+
+      const expiresAt = new Date(now.getTime() + this.config.holdTtlSeconds * 1_000);
+      const token = randomBytes(32).toString("base64url");
+      const hold = await transaction.tableHold.create({ data: { tableId, requestKey, token, expiresAt } });
+      const changed = await transaction.table.updateMany({
+        where: { id: tableId, status: TableStatus.available },
+        data: { status: TableStatus.held, holdToken: token, holdRequestKey: requestKey, holdExpiresAt: expiresAt },
+      });
+      if (changed.count !== 1) throw tableUnavailable();
+      await this.domainEvents.append(transaction, {
+        eventType: "table.hold_created",
+        aggregateType: "table",
+        aggregateId: tableId,
+        payload: { holdId: hold.id, expiresAt: expiresAt.toISOString() },
+      });
+      return hold;
+  }
+
+  async releaseInTransaction(
+    transaction: TableTransaction,
+    tableId: string,
+    token: string,
+    actorId: string | null = null,
+  ): Promise<ReleaseTableHoldResponse> {
+      await lockTable(transaction, tableId);
+      const table = await transaction.table.findUnique({ where: { id: tableId } });
+      const hold = await transaction.tableHold.findUnique({ where: { token } });
+      if (!table || !hold || hold.tableId !== tableId) throw holdNotFound();
+      await this.expireLocked(transaction, table, this.clock.now());
+      const current = await transaction.tableHold.findUniqueOrThrow({ where: { id: hold.id } });
+      if (current.status === TableHoldStatus.released || current.status === TableHoldStatus.expired) {
+        return { tableId, released: true, status: current.status };
+      }
+      if (current.status === TableHoldStatus.confirmed) {
+        throw new ConflictException({ code: "TABLE_ALREADY_BOOKED", message: "A confirmed table cannot be released" });
+      }
+      const refreshed = await transaction.table.findUniqueOrThrow({ where: { id: tableId } });
+      if (refreshed.status !== TableStatus.held || refreshed.holdToken !== token) throw holdConflict();
+      await this.releaseHoldInventory(transaction, tableId, current.id, this.clock.now());
+      await transaction.tableHold.update({ where: { id: current.id }, data: { status: TableHoldStatus.released } });
+      await transaction.table.update({ where: { id: tableId }, data: clearHold(TableStatus.available) });
+      await this.record(transaction, actorId, tableId, "table.hold_released", { holdId: current.id }, true);
+      return { tableId, released: true, status: "released" };
+  }
+
+  async confirm(tableId: string, token: string, orderId: string, actorId: string | null = null): Promise<VenueTable> {
+    const table = await this.database.$transaction((transaction) =>
+      this.confirmInTransaction(transaction, tableId, token, orderId, actorId),
+    );
+    return presentTable(table);
+  }
+
+  async confirmInTransaction(
+    transaction: TableTransaction,
+    tableId: string,
+    token: string,
+    orderId: string,
+    actorId: string | null = null,
+  ): Promise<Table> {
+      await lockTable(transaction, tableId);
+      let table = await transaction.table.findUnique({ where: { id: tableId } });
+      const hold = await transaction.tableHold.findUnique({ where: { token } });
+      if (!table || !hold || hold.tableId !== tableId) throw holdConflict();
+      const booking = await transaction.booking.findUnique({ where: { orderId } });
+      if (hold.status === TableHoldStatus.confirmed) {
+        if (booking?.tableId === tableId && booking.status === BookingStatus.confirmed && table.status === TableStatus.booked) return table;
+        throw confirmationConflict();
+      }
+      await this.expireLocked(transaction, table, this.clock.now());
+      table = await transaction.table.findUniqueOrThrow({ where: { id: tableId } });
+      const activeHold = await transaction.tableHold.findUniqueOrThrow({ where: { id: hold.id } });
+      if (
+        activeHold.status !== TableHoldStatus.active ||
+        activeHold.expiresAt <= this.clock.now() ||
+        table.status !== TableStatus.held ||
+        table.holdToken !== token ||
+        booking?.tableId !== tableId ||
+        booking.status !== BookingStatus.pending
+      ) throw confirmationConflict();
+
+      await transaction.booking.update({ where: { id: booking.id }, data: { status: BookingStatus.confirmed } });
+      await transaction.tableHold.update({ where: { id: activeHold.id }, data: { status: TableHoldStatus.confirmed } });
+      const booked = await transaction.table.update({ where: { id: tableId }, data: clearHold(TableStatus.booked) });
+      await this.record(transaction, actorId, tableId, "table.booking_confirmed", { holdId: activeHold.id, bookingId: booking.id, orderId }, true);
+      return booked;
+  }
+
+  async expireDueHolds(limit: number): Promise<number> {
+    const due = await this.database.tableHold.findMany({
+      where: { status: TableHoldStatus.active, expiresAt: { lte: this.clock.now() } },
+      select: { tableId: true },
+      orderBy: { expiresAt: "asc" },
+      take: Math.max(1, Math.min(limit, 500)),
+    });
+    let expired = 0;
+    for (const { tableId } of due) if (await this.expireTableIfDue(tableId)) expired += 1;
+    return expired;
+  }
+
+  async expireLayoutHolds(layoutId: string): Promise<number> {
+    const due = await this.database.tableHold.findMany({
+      where: { status: TableHoldStatus.active, expiresAt: { lte: this.clock.now() }, table: { venueLayoutId: layoutId } },
+      select: { tableId: true },
+      take: 500,
+    });
+    let expired = 0;
+    for (const { tableId } of due) if (await this.expireTableIfDue(tableId)) expired += 1;
+    return expired;
+  }
+
+  private async expireTableIfDue(tableId: string): Promise<boolean> {
+    return this.database.$transaction(async (transaction) => {
+      // Lock order is order → table: lock the held orders before the table, then re-check under both.
+      const peek = await transaction.table.findUnique({ where: { id: tableId }, select: { holdToken: true } });
+      const hold = peek?.holdToken ? await transaction.tableHold.findUnique({ where: { token: peek.holdToken }, select: { id: true } }) : null;
+      for (const orderId of hold ? await holdOrderIds(transaction, tableId, hold.id) : []) await lockOrder(transaction, orderId);
+      await lockTable(transaction, tableId);
+      const table = await transaction.table.findUnique({ where: { id: tableId } });
+      if (!table) return false;
+      return this.expireLocked(transaction, table, this.clock.now());
+    });
+  }
+
+  private async expireLocked(transaction: TableTransaction, table: Table, now: Date): Promise<boolean> {
+    if (table.status !== TableStatus.held || !table.holdExpiresAt || table.holdExpiresAt > now || !table.holdToken) return false;
+    const hold = await transaction.tableHold.findUnique({ where: { token: table.holdToken } });
+    if (!hold || hold.status !== TableHoldStatus.active) return false;
+    // The table lock is already held, so the order lock may only be tried: waiting here would invert order → table.
+    // If an order is busy (settling or being cancelled), it decides the hold's fate; the worker retries later.
+    for (const orderId of await holdOrderIds(transaction, table.id, hold.id)) if (!await tryLockOrder(transaction, orderId)) return false;
+    await this.releaseHoldInventory(transaction, table.id, hold.id, now);
+    await transaction.tableHold.update({ where: { id: hold.id }, data: { status: TableHoldStatus.expired } });
+    await transaction.table.update({ where: { id: table.id }, data: clearHold(TableStatus.available) });
+    await this.domainEvents.append(transaction, {
+      eventType: "table.hold_expired",
+      aggregateType: "table",
+      aggregateId: table.id,
+      payload: { holdId: hold.id, expiredAt: now.toISOString() },
+    });
+    return true;
+  }
+
+  /** Caller holds the table lock. Historical paid orders cannot belong to a
+   * later hold; old pending bookings may predate the tableHoldId relation. */
+  private async releaseHoldInventory(transaction: TableTransaction, tableId: string, holdId: string, now: Date): Promise<void> {
+    const bookings = await transaction.booking.findMany({
+      where: { tableId, OR: [
+        { tableHoldId: holdId },
+        { tableHoldId: null, status: BookingStatus.pending, order: { paymentStatus: "pending" } },
+      ] },
+      select: { id: true, orderId: true },
+    });
+    await transaction.booking.updateMany({ where: { id: { in: bookings.map(booking => booking.id) }, status: BookingStatus.pending }, data: { status: BookingStatus.expired } });
+    // The caller holds these orders' locks. Only unpaid orders give their inventory back here; the order
+    // itself stays pending until checkout expiry cancels it (its expiresAt is never later than the hold's).
+    const unpaid = await transaction.order.findMany({ where: { id: { in: bookings.map(booking => booking.orderId) }, paymentStatus: "pending" }, select: { id: true }, orderBy: { id: "asc" } });
+    for (const order of unpaid) await releaseOrderInventory(transaction, order.id, { terminalTicketStatus: "cancelled", reason: "expired", now });
+  }
+
+  private async findOwnedLayout(
+    database: Pick<PrismaClient, "venueLayout"> | Pick<TableTransaction, "venueLayout">,
+    organizerId: string,
+    id: string,
+  ) {
+    const layout = await database.venueLayout.findFirst({
+      where: { id, OR: [{ organizerId }, { event: { organizerId } }] },
+    });
+    if (!layout) throw layoutNotFound();
+    return layout;
+  }
+
+  private async findOwnedTable(
+    database: Pick<PrismaClient, "table"> | Pick<TableTransaction, "table">,
+    organizerId: string,
+    id: string,
+  ): Promise<Table> {
+    const table = await database.table.findFirst({
+      where: { id, venueLayout: { OR: [{ organizerId }, { event: { organizerId } }] } },
+    });
+    if (!table) throw tableNotFound();
+    return table;
+  }
+
+  private async record(
+    transaction: Pick<TableTransaction, "auditLog" | "outboxEvent">,
+    actorId: string | null,
+    tableId: string,
+    eventType: string,
+    payload: Prisma.InputJsonObject,
+    alwaysAudit = true,
+  ): Promise<void> {
+    await this.domainEvents.append(transaction, { eventType, aggregateType: "table", aggregateId: tableId, payload });
+    if (alwaysAudit) {
+      await transaction.auditLog.create({ data: { actorId, action: eventType, entityType: "table", entityId: tableId, meta: payload } });
+    }
+  }
+}
+
+export { lockTable };
+
+/** Orders whose inventory a hold expiry releases (see releaseHoldInventory), sorted for locking. */
+async function holdOrderIds(transaction: TableTransaction, tableId: string, holdId: string): Promise<string[]> {
+  const bookings = await transaction.booking.findMany({
+    where: { tableId, OR: [
+      { tableHoldId: holdId },
+      { tableHoldId: null, status: BookingStatus.pending, order: { paymentStatus: "pending" } },
+    ] },
+    select: { orderId: true },
+  });
+  return [...new Set(bookings.map((booking) => booking.orderId))].sort();
+}
+
+async function tableSeatIds(transaction: TableTransaction, tableId: string): Promise<string[]> {
+  return (await transaction.seat.findMany({ where: { tableId }, select: { id: true } })).map((seat) => seat.id);
+}
+
+/** Locks (sorted) the ticket types the table's seats are priced by; ids already in `locked` are skipped. */
+async function lockMappedTicketTypes(transaction: TableTransaction, tableId: string, locked: Set<string>): Promise<void> {
+  const mapped = await transaction.seat.findMany({ where: { tableId, ticketTypeId: { not: null } }, select: { ticketTypeId: true } });
+  const ids = [...new Set(mapped.flatMap((seat) => (seat.ticketTypeId ? [seat.ticketTypeId] : [])))];
+  await lockTicketTypes(transaction, ids);
+  for (const id of ids) locked.add(id);
+}
+
+async function lockLayout(transaction: TableTransaction, id: string): Promise<void> {
+  await transaction.$queryRaw`SELECT 1 AS "locked" FROM pg_advisory_xact_lock(hashtextextended(${`venue-layout:${id}`}, 0))`;
+}
+
+function clearHold(status: "available" | "booked"): Prisma.TableUpdateInput {
+  return { status, holdToken: null, holdRequestKey: null, holdExpiresAt: null };
+}
+
+function parseLayout(value: Prisma.JsonValue): VenueLayoutAny {
+  const parsed = venueLayoutSchemaAny.safeParse(value);
+  if (!parsed.success) throw new ConflictException({ code: "VENUE_LAYOUT_DATA_INVALID", message: "Stored layout geometry is invalid" });
+  return parsed.data;
+}
+
+function validateRequestKey(value: string | undefined): string {
+  const key = value?.trim();
+  if (!key || key.length < 8 || key.length > 128 || !/^[A-Za-z0-9._:-]+$/.test(key)) {
+    throw new BadRequestException({ code: "IDEMPOTENCY_KEY_INVALID", message: "Idempotency-Key must contain 8-128 safe characters" });
+  }
+  return key;
+}
+
+function assertManagedStatus(status: unknown): void {
+  if (status !== undefined && status !== TableStatus.available && status !== TableStatus.unavailable) {
+    throw new BadRequestException({ code: "TABLE_STATUS_MANAGED_ONLY", message: "General table mutations may only set available or unavailable" });
+  }
+}
+function nullableText(value: string | null | undefined): string | null { return value?.trim() || null; }
+function tableNotFound(): NotFoundException { return new NotFoundException({ code: "TABLE_NOT_FOUND", message: "Table was not found" }); }
+function layoutNotFound(): NotFoundException { return new NotFoundException({ code: "VENUE_LAYOUT_NOT_FOUND", message: "Venue layout was not found" }); }
+function holdNotFound(): NotFoundException { return new NotFoundException({ code: "TABLE_HOLD_NOT_FOUND", message: "Table hold was not found" }); }
+function tableUnavailable(): ConflictException { return new ConflictException({ code: "TABLE_UNAVAILABLE", message: "Table is not available" }); }
+function holdConflict(): ConflictException { return new ConflictException({ code: "TABLE_HOLD_CONFLICT", message: "Hold token does not match the active table hold" }); }
+function confirmationConflict(): ConflictException { return new ConflictException({ code: "TABLE_CONFIRMATION_CONFLICT", message: "Table hold and pending booking cannot be confirmed" }); }
+function layoutLimit(): ConflictException { return new ConflictException({ code: "VENUE_LAYOUT_TABLE_LIMIT", message: "A venue layout can contain at most 500 tables" }); }
+
+function mapTableConstraint(error: unknown): unknown {
+  if ((error as { code?: string }).code === "P2002") {
+    return new ConflictException({ code: "TABLE_NUMBER_CONFLICT", message: "Table number must be unique within the layout" });
+  }
+  return error;
+}
+
+type PublicTableRow = Prisma.TableGetPayload<{ include: { seatRecords: { include: { allocations: { select: { id: true } } } } } }>;
+type PublicLayoutRow = Prisma.VenueLayoutGetPayload<{ include: { event: true } }>;
+
+function presentPublicTable(table: PublicTableRow, status: TableStatus, layout: PublicLayoutRow, includeUnpublished: boolean): PublicTable {
+  return {
+    id: table.id,
+    number: table.number,
+    name: table.name,
+    seats: table.seats,
+    price:
+      layout.event?.paymentMode === EventPaymentMode.deposit &&
+      !layout.event.showFullAmountForDeposit
+        ? null
+        : table.price,
+    deposit: table.deposit,
+    currency: table.currency.trim(),
+    description: table.description,
+    typeLabel: table.typeLabel,
+    shortDescription: table.shortDescription,
+    saleMode: table.saleMode,
+    seatsDetail: table.seatRecords.map((seat) => ({
+      id: seat.id,
+      number: seat.number,
+      label: seat.label,
+      sortOrder: seat.sortOrder,
+      status: seat.status === "available" && seat.allocations.length === 0 ? "available" : "unavailable",
+    })),
+    availability: !includeUnpublished && (layout.event?.salesPaused || layout.event?.moderationStatus !== "approved") ? "unavailable" : status === TableStatus.booked ? "booked" : status === TableStatus.available ? "available" : "unavailable",
+    payment: historicalPaymentOption(layout.event!, table.price, table.deposit, table.currency.trim()),
+  };
+}

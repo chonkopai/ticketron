@@ -1,0 +1,52 @@
+import type { Event } from "@event-platform/database";
+import type { OrganizerEvent } from "@event-platform/shared-types";
+
+export function presentEvent(event: Event): OrganizerEvent {
+  return {
+    id: event.id,
+    creationVersion:event.creationVersion,
+    organizerId: event.organizerId,
+    sourceLocale: event.sourceLocale as OrganizerEvent["sourceLocale"],
+    currency:event.currency?.trim()??null,
+    title: event.title,
+    category: event.category,
+    countryCode: event.countryCode,
+    city: event.city,
+    posterUrl: event.posterUrl,
+    description: event.description,
+    program: event.program,
+    rules: event.rules,
+    visitTerms: event.visitTerms,
+    cancellationTerms: event.cancellationTerms,
+    paymentMode: event.paymentMode,
+    showFullAmountForDeposit: event.showFullAmountForDeposit,
+    depositTerms: event.depositTerms,
+    extraConditions: event.extraConditions,
+    date: formatDate(event.date),
+    time: formatTime(event.time),
+    timezone: event.timezone,
+    ageRestriction: event.ageRestriction as OrganizerEvent["ageRestriction"],
+    address: event.address,
+    status: event.status,
+    revision: event.revision,
+    moderationStatus: event.moderationStatus,
+    approvedAt: event.approvedAt?.toISOString() ?? null,
+    salesPaused: event.salesPaused,
+    moderationReason: event.moderationReason,
+    createdAt: event.createdAt.toISOString(),
+    updatedAt: event.updatedAt.toISOString(),
+  };
+}
+
+function formatDate(value: Date): string {
+  const year = value.getUTCFullYear().toString().padStart(4, "0");
+  const month = (value.getUTCMonth() + 1).toString().padStart(2, "0");
+  const day = value.getUTCDate().toString().padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function formatTime(value: Date): string {
+  const hour = value.getUTCHours().toString().padStart(2, "0");
+  const minute = value.getUTCMinutes().toString().padStart(2, "0");
+  return `${hour}:${minute}`;
+}

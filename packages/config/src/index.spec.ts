@@ -1,0 +1,140 @@
+import { describe, expect, it } from "vitest";
+import { ZodError } from "zod";
+
+import { apiEnvSchema, loadApiEnv, loadBotEnv, loadWebEnv,loadTranslationEnv } from "./index.js";
+
+describe("environment loaders", () => {
+  it("accepts only an explicit bounded integer proxy hop count", () => {
+    const hops = apiEnvSchema.shape.API_TRUST_PROXY_HOPS;
+    expect(hops.parse(undefined)).toBe(0);
+    expect(hops.parse("1")).toBe(1);
+    expect(hops.parse("2")).toBe(2);
+    for (const value of ["true", "-1", "1.5", "11", "loopback"]) expect(() => hops.parse(value)).toThrow(ZodError);
+  });
+  it("enables Telegram approval only with explicit server configuration and a canonical origin", () => {
+    const base = { DATABASE_URL: "postgresql://user:password@localhost:5432/test", JWT_SECRET: "a".repeat(32), JWT_REFRESH_SECRET: "b".repeat(32), BOT_API_SECRET: "c".repeat(32), TELEGRAM_BOT_TOKEN: "123456:test-token", TELEGRAM_BOT_USERNAME: "event_platform_bot", WEB_ORIGIN: "https://staging.example.com" };
+    expect(loadApiEnv(base).TELEGRAM_OIDC_ENABLED).toBe(false);
+    expect(() => loadApiEnv({ ...base, TELEGRAM_OIDC_ENABLED: "true" })).toThrow(ZodError);
+    const enabled = { ...base, TELEGRAM_OIDC_ENABLED: "true", TELEGRAM_OIDC_CLIENT_ID: "123456", TELEGRAM_OIDC_CLIENT_SECRET: "oidc-secret" };
+    expect(loadApiEnv(enabled).TELEGRAM_OIDC_ENABLED).toBe(true);
+    for (const WEB_ORIGIN of ["https://staging.example.com/", "https://staging.example.com/path", "http://staging.example.com"]) expect(() => loadApiEnv({ ...enabled, WEB_ORIGIN })).toThrow(ZodError);
+    expect(loadApiEnv({ ...base, TELEGRAM_OIDC_CLIENT_ID: "", TELEGRAM_OIDC_CLIENT_SECRET: "" }).TELEGRAM_OIDC_ENABLED).toBe(false);
+  });
+  it("loads API configuration without REDIS_URL (Redis is not used)", () => {
+    const env = loadApiEnv({ DATABASE_URL: "postgresql://user:password@localhost:5432/event_platform", JWT_SECRET: "a".repeat(32), JWT_REFRESH_SECRET: "b".repeat(32), BOT_API_SECRET: "c".repeat(32), TELEGRAM_BOT_TOKEN: "123456:test-token", TELEGRAM_BOT_USERNAME: "event_platform_bot" });
+    expect(env).not.toHaveProperty("REDIS_URL");
+  });
+  it("loads and coerces API configuration", () => {
+    const env = loadApiEnv({
+      API_PORT: "3101",
+      DATABASE_URL: "postgresql://user:password@localhost:5432/event_platform",
+      JWT_SECRET: "a-secure-development-secret-with-32-chars",
+      JWT_REFRESH_SECRET: "a-separate-refresh-secret-with-32-characters",
+      TELEGRAM_BOT_TOKEN: "123456:test-token",
+      TELEGRAM_BOT_USERNAME: "event_platform_bot",
+      BOT_API_SECRET: "a-secure-bot-api-secret-with-32-characters",
+    });
+
+    expect(env.API_PORT).toBe(3101);
+    expect(env.API_TRUST_PROXY_HOPS).toBe(0);
+    expect(env.PAYMENT_PROVIDER_NAME).toBe("mock");
+    expect(env.TABLE_HOLD_TTL_SECONDS).toBe(600);
+    expect(env.TABLE_HOLD_CLEANUP_INTERVAL_SECONDS).toBe(60);
+    expect(env.CHECKOUT_TTL_SECONDS).toBe(900);
+    expect(env.CHECKOUT_CLEANUP_INTERVAL_SECONDS).toBe(60);
+    expect(env.TRANSACTIONAL_NOTIFICATIONS_ENABLED).toBe(false);
+    expect(loadApiEnv({
+      API_PORT: "3101",
+      DATABASE_URL: "postgresql://user:password@localhost:5432/event_platform",
+      JWT_SECRET: "a-secure-development-secret-with-32-chars",
+      JWT_REFRESH_SECRET: "a-separate-refresh-secret-with-32-characters",
+      TELEGRAM_BOT_TOKEN: "123456:test-token",
+      TELEGRAM_BOT_USERNAME: "event_platform_bot",
+      BOT_API_SECRET: "a-secure-bot-api-secret-with-32-characters",
+      TRANSACTIONAL_NOTIFICATIONS_ENABLED: "true",
+    }).TRANSACTIONAL_NOTIFICATIONS_ENABLED).toBe(true);
+  });
+
+  it("rejects an insecure JWT secret", () => {
+    expect(() =>
+      loadApiEnv({
+        DATABASE_URL: "postgresql://user:password@localhost:5432/event_platform",
+        JWT_SECRET: "short",
+        JWT_REFRESH_SECRET: "a-separate-refresh-secret-with-32-characters",
+        TELEGRAM_BOT_TOKEN: "123456:test-token",
+        TELEGRAM_BOT_USERNAME: "event_platform_bot",
+        BOT_API_SECRET: "a-secure-bot-api-secret-with-32-characters",
+      }),
+    ).toThrow(ZodError);
+  });
+
+  it("loads surface-specific web and bot configuration", () => {
+    expect(
+      loadWebEnv({
+        NEXT_PUBLIC_API_URL: "http://localhost:3001",
+        NEXT_PUBLIC_TELEGRAM_BOT_USERNAME: "event_platform_bot",
+      }).NODE_ENV,
+    ).toBe("development");
+    expect(
+      loadBotEnv({
+        API_BASE_URL: "http://localhost:3001",
+        BOT_API_SECRET: "a-secure-bot-api-secret-with-32-characters",
+        TELEGRAM_BOT_TOKEN: "123456:test-token",
+        TELEGRAM_BOT_USERNAME: "event_platform_bot",
+        TELEGRAM_WEBHOOK_SECRET: "a-dedicated-webhook-secret-with-32-characters",
+      }).BOT_PORT,
+    ).toBe(3002);
+  });
+
+  it("rejects insecure production origins and ephemeral relative media paths", () => {
+    expect(() => loadApiEnv({
+      NODE_ENV: "production", DATABASE_URL: "postgresql://user:password@localhost:5432/event_platform",
+      JWT_SECRET: "a".repeat(32), JWT_REFRESH_SECRET: "b".repeat(32), BOT_API_SECRET: "c".repeat(32),
+      TELEGRAM_BOT_TOKEN: "123456:test-token", TELEGRAM_BOT_USERNAME: "event_platform_bot", WEB_ORIGIN: "http://example.com", POSTER_STORAGE_DIR: "var/posters",
+    })).toThrow(ZodError);
+    expect(() => loadWebEnv({ NODE_ENV: "production", NEXT_PUBLIC_API_URL: "http://example.com", NEXT_PUBLIC_TELEGRAM_BOT_USERNAME: "event_platform_bot" })).toThrow(ZodError);
+  });
+
+  it("refuses the mock provider or demo mode in production on a non-demo domain", () => {
+    const production = {
+      NODE_ENV: "production", DATABASE_URL: "postgresql://user:password@localhost:5432/event_platform", REDIS_URL: "redis://localhost:6379",
+      JWT_SECRET: "a".repeat(32), JWT_REFRESH_SECRET: "b".repeat(32), BOT_API_SECRET: "c".repeat(32), OTP_HMAC_SECRET: "d".repeat(32),
+      TELEGRAM_BOT_TOKEN: "123456:test-token", TELEGRAM_BOT_USERNAME: "event_platform_bot", POSTER_STORAGE_DIR: "/data/posters", DRAFT_MEDIA_STORAGE_DIR: "/data/draft-media",
+      PAYMENT_PROVIDER_NAME: "mock", DEMO_MODE: "true",
+    };
+    // Demo and staging hosts keep working.
+    for (const WEB_ORIGIN of ["https://staging.example.com", "https://demo.example.com", "https://staging-2.example.com"]) expect(loadApiEnv({ ...production, WEB_ORIGIN }).DEMO_MODE).toBe(true);
+    // The apex, www and any other real domain are refused, with demo mode on or off.
+    for (const WEB_ORIGIN of ["https://example.com", "https://www.example.com", "https://tickets.example.com", "https://stagingfake.example.com"]) {
+      expect(() => loadApiEnv({ ...production, WEB_ORIGIN })).toThrow(ZodError);
+      expect(() => loadApiEnv({ ...production, WEB_ORIGIN, DEMO_MODE: "false" })).toThrow(ZodError);
+    }
+    // Outside production nothing changes.
+    expect(loadApiEnv({ ...production, NODE_ENV: "development", WEB_ORIGIN: "https://example.com" }).PAYMENT_PROVIDER_NAME).toBe("mock");
+  });
+
+  it("requires a sender with a Resend key and enforces the verified sender domain", () => {
+    const base = {
+      DATABASE_URL: "postgresql://user:password@localhost:5432/event_platform",
+      JWT_SECRET: "a".repeat(32), JWT_REFRESH_SECRET: "b".repeat(32), BOT_API_SECRET: "c".repeat(32),
+      TELEGRAM_BOT_TOKEN: "123456:test-token", TELEGRAM_BOT_USERNAME: "event_platform_bot", RESEND_API_KEY: "re_testkey",
+    };
+    expect(() => loadApiEnv(base)).toThrow(ZodError);
+    const verified = { ...base, RESEND_SENDER_DOMAIN: "mail.example.com" };
+    expect(() => loadApiEnv({ ...verified, RESEND_FROM_EMAIL: "tickets@other.example" })).toThrow(ZodError);
+    expect(loadApiEnv({ ...verified, RESEND_FROM_EMAIL: "tickets@mail.example.com" }).RESEND_FROM_EMAIL).toBe("tickets@mail.example.com");
+  });
+});
+
+describe("server translation configuration",()=>{
+  it("selects Azure explicitly and validates its server credentials and region",()=>{
+    expect(loadTranslationEnv({}).TRANSLATION_PROVIDER).toBe("google");
+    expect(loadTranslationEnv({TRANSLATION_PROVIDER:"azure",AZURE_TRANSLATOR_KEY:"  key  "})).toMatchObject({TRANSLATION_PROVIDER:"azure",AZURE_TRANSLATOR_KEY:"key",AZURE_TRANSLATOR_REGION:"global"});
+    expect(loadTranslationEnv({AZURE_TRANSLATOR_KEY:" "}).AZURE_TRANSLATOR_KEY).toBeUndefined();
+    for(const value of [{TRANSLATION_PROVIDER:"invalid"},{AZURE_TRANSLATOR_REGION:"eastus?key=secret"}])expect(()=>loadTranslationEnv(value)).toThrow(ZodError);
+  });
+  it("accepts missing credentials and enforces bounded retry, timeout and quotas",()=>{
+    expect(loadTranslationEnv({GOOGLE_TRANSLATE_API_KEY:"  "}).GOOGLE_TRANSLATE_API_KEY).toBeUndefined();expect(loadTranslationEnv({}).TRANSLATION_RETRIES).toBe(1);
+    for(const value of [{TRANSLATION_RETRIES:"3"},{TRANSLATION_TIMEOUT_MS:"0"},{TRANSLATION_DAILY_CHARACTERS:"0"}])expect(()=>loadTranslationEnv(value)).toThrow(ZodError);
+  });
+});

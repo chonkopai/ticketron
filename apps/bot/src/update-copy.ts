@@ -1,0 +1,32 @@
+export const updateCopy = {
+  en: {
+    compose: "Reply with the update you want guests to receive. Up to 1,000 characters.",
+    pickType: "What is the update about?", preview: "👀 Review the update", changed: "⚠️ The event or audience changed. Review it again.", send: "📣 Send update",
+    eligible: "Eligible", reachable: "Telegram reachable", history: "🕓 Send history", empty: "📭 No updates sent yet.",
+    accepted: "Accepted means Telegram received the message. Inbox reading is separate.",
+    preferences: "🔔 Notifications", reminders: "Event reminders", tickets: "Tickets in Telegram",
+    critical: "Critical event notices, including cancellation, stay enabled.", on: "🔔 on", off: "🔕 off",
+    inboxRead: "read", read: "✓ Mark read", unread: "Unread", event: "🎭 Event", order: "🧾 Order",
+    types: { program: "Program", time: "Time", venue: "Venue", rules: "Rules", conditions: "Conditions", cancellation: "Cancellation", important: "Important" },
+  },
+  ru: {
+    compose: "Ответьте текстом обновления для гостей. До 1 000 символов.",
+    pickType: "О чём обновление?", preview: "👀 Проверьте обновление", changed: "⚠️ Событие или аудитория изменились. Проверьте ещё раз.", send: "📣 Отправить",
+    eligible: "Гостей в аудитории", reachable: "Доступны в Telegram", history: "🕓 История отправок", empty: "📭 Отправок пока нет.",
+    accepted: "Telegram принял сообщение. Прочтение во входящих учитывается отдельно.",
+    preferences: "🔔 Уведомления", reminders: "Напоминания о событиях", tickets: "Билеты в Telegram",
+    critical: "Важные уведомления, включая отмену события, остаются включёнными.", on: "🔔 вкл.", off: "🔕 выкл.",
+    inboxRead: "прочитано", read: "✓ Прочитано", unread: "Непрочитано", event: "🎭 Событие", order: "🧾 Заказ",
+    types: { program: "Программа", time: "Время", venue: "Место", rules: "Правила", conditions: "Условия", cancellation: "Отмена", important: "Важное" },
+  },
+  kk: {
+    compose: "Қонақтарға жіберілетін жаңартуды жазыңыз. 1 000 таңбаға дейін.",
+    pickType: "Жаңарту не туралы?", preview: "👀 Жаңартуды тексеріңіз", changed: "⚠️ Іс-шара немесе аудитория өзгерді. Қайта тексеріңіз.", send: "📣 Жіберу",
+    eligible: "Аудитория", reachable: "Telegram-да қолжетімді", history: "🕓 Жіберу тарихы", empty: "📭 Әзірге жаңарту жіберілген жоқ.",
+    accepted: "Telegram хабарламаны қабылдады. Оқылған күйі бөлек есептеледі.",
+    preferences: "🔔 Хабарландырулар", reminders: "Іс-шара еске салғыштары", tickets: "Билеттер Telegram-да",
+    critical: "Маңызды ескертулер, соның ішінде іс-шараның тоқтатылуы, қосулы қалады.", on: "🔔 қосулы", off: "🔕 өшірулі",
+    inboxRead: "оқылды", read: "✓ Оқылды", unread: "Оқылмаған", event: "🎭 Іс-шара", order: "🧾 Тапсырыс",
+    types: { program: "Бағдарлама", time: "Уақыт", venue: "Өтетін орын", rules: "Ережелер", conditions: "Шарттар", cancellation: "Тоқтату", important: "Маңызды" },
+  },
+} as const;

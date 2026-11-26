@@ -1,0 +1,69 @@
+import { catalogCityOptions, cityAliases, COUNTRY_CODES } from "@event-platform/shared-types";
+
+export const CATALOG_LOCATION_STORAGE_KEY = "ticket:catalog-location";
+const PROMPT_KEY = "ticket:city-prompt-dismissed";
+let promptDismissed = false;
+
+export interface CatalogLocation { countryCode: string; city: string }
+
+export function shouldSuggestCatalogLocation(preferred?: CatalogLocation | null): boolean {
+  if (promptDismissed || savedCatalogLocation() || preferred?.countryCode || preferred?.city) return false;
+  try { return !window.localStorage.getItem(PROMPT_KEY); } catch { return true; }
+}
+
+export function dismissCatalogLocationSuggestion(): void {
+  promptDismissed = true;
+  try { window.localStorage.setItem(PROMPT_KEY, "dismissed"); } catch { /* Keep the decision for this page session. */ }
+}
+
+export function validCountryCode(value: string | null): string | null {
+  return value && (COUNTRY_CODES as readonly string[]).includes(value) ? value : null;
+}
+
+export function savedCatalogLocation(): CatalogLocation | null {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(CATALOG_LOCATION_STORAGE_KEY) ?? "null") as (Partial<CatalogLocation> & { expiresAt?: number }) | null;
+    if (value?.expiresAt && value.expiresAt < Date.now()) return null;
+    if (value?.countryCode === "" && value.city === "") return { countryCode: "", city: "" };
+    const countryCode = validCountryCode(value?.countryCode ?? null);
+    return value && countryCode && typeof value.city === "string"
+      ? { countryCode, city: value.city }
+      : null;
+  } catch { return null; }
+}
+
+export function rememberCatalogLocation(location: CatalogLocation, automatic = false): void {
+  try { window.localStorage.setItem(CATALOG_LOCATION_STORAGE_KEY, JSON.stringify({ ...location, ...(automatic ? { expiresAt: Date.now() + 24 * 60 * 60 * 1000 } : {}) })); } catch { /* Storage can be unavailable. */ }
+}
+
+export function clearCatalogLocation(): void {
+  rememberCatalogLocation({ countryCode: "", city: "" });
+}
+
+let detection: Promise<CatalogLocation | null> | undefined;
+/** The third-party IP lookup is off unless the operator enables it (it sends the visitor's IP to ipwho.is). */
+export function ipGeolocationEnabled(): boolean {
+  return process.env.NEXT_PUBLIC_IP_GEOLOCATION_ENABLED === "true";
+}
+
+export function detectCatalogLocation(): Promise<CatalogLocation | null> {
+  // Disabled: no suggestion is shown and the catalog keeps the default city.
+  if (!ipGeolocationEnabled()) return Promise.resolve(null);
+  // One approximate IP lookup per page session; never request precise GPS coordinates.
+  return detection ??= lookupCatalogLocation();
+}
+
+export async function lookupCatalogLocation(request: typeof fetch = fetch): Promise<CatalogLocation | null> {
+  try {
+    const response = await request("https://ipwho.is/?fields=success,country_code,city", { signal: AbortSignal.timeout(5000), credentials: "omit", referrerPolicy: "no-referrer" });
+    if (!response.ok) return null;
+    const value = await response.json() as { success?: boolean; country_code?: string; city?: string };
+    const countryCode = validCountryCode(value.country_code ?? null);
+    const city = typeof value.city === "string" ? value.city.trim().slice(0, 80) : "";
+    return value.success && countryCode && city ? { countryCode, city } : null;
+  } catch { return null; }
+}
+
+export function countryForCity(city: string): string | null {
+  return COUNTRY_CODES.find(code => catalogCityOptions(code, "ru").some(option => cityAliases(option.value, code).some(alias => alias.toLocaleLowerCase() === city.trim().toLocaleLowerCase()))) ?? null;
+}

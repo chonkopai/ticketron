@@ -1,0 +1,127 @@
+/* /login page: animated backdrop, top-bar pills and segmented control. */
+
+.ticket-login {
+  --login-glow-a: rgb(99 32 238 / .16);
+  --login-glow-b: rgb(56 140 255 / .12);
+  --login-glow-c: rgb(236 72 153 / .08);
+  --login-beam: rgb(99 32 238 / .07);
+  background: var(--ticket-bg);
+}
+:root[data-theme="dark"] .ticket-login {
+  --login-glow-a: rgb(124 58 237 / .26);
+  --login-glow-b: rgb(56 140 255 / .10);
+  --login-glow-c: rgb(236 72 153 / .10);
+  --login-beam: rgb(183 148 244 / .08);
+}
+
+/* ---------- Backdrop ---------- */
+.ticket-login-backdrop { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
+
+.ticket-login-orb { position: absolute; border-radius: 50%; filter: blur(70px); will-change: transform; }
+.ticket-login-orb-1 { width: 560px; height: 560px; left: -140px; top: -180px; background: var(--login-glow-a); animation: ticket-login-drift-1 38s ease-in-out infinite alternate; }
+.ticket-login-orb-2 { width: 480px; height: 480px; right: -160px; bottom: -160px; background: var(--login-glow-b); animation: ticket-login-drift-2 44s ease-in-out infinite alternate; }
+.ticket-login-orb-3 { width: 380px; height: 380px; right: 18%; top: 8%; background: var(--login-glow-c); animation: ticket-login-drift-3 52s ease-in-out infinite alternate; }
+@keyframes ticket-login-drift-1 { to { transform: translate(160px, 120px) scale(1.12); } }
+@keyframes ticket-login-drift-2 { to { transform: translate(-180px, -90px) scale(1.08); } }
+@keyframes ticket-login-drift-3 { to { transform: translate(-120px, 160px) scale(.9); } }
+
+/* Stage spotlights sweeping gently from the top corners */
+.ticket-login-beam {
+  position: absolute; top: -10%; width: 46vw; max-width: 620px; height: 130%;
+  transform-origin: 50% 0;
+  background: linear-gradient(180deg, var(--login-beam), transparent 70%);
+  clip-path: polygon(46% 0, 54% 0, 100% 100%, 0 100%);
+  filter: blur(18px);
+  opacity: .9;
+}
+.ticket-login-beam-left { left: 4%; animation: ticket-login-sweep-left 22s ease-in-out infinite alternate; }
+.ticket-login-beam-right { right: 4%; animation: ticket-login-sweep-right 26s ease-in-out infinite alternate; }
+@keyframes ticket-login-sweep-left { from { transform: rotate(-24deg); } to { transform: rotate(-6deg); } }
+@keyframes ticket-login-sweep-right { from { transform: rotate(24deg); } to { transform: rotate(8deg); } }
+
+/* Ticket stubs and sparkles floating upward */
+.ticket-login-floater {
+  position: absolute; bottom: -120px;
+  color: var(--ticket-accent);
+  opacity: 0;
+  animation: ticket-login-float var(--float-duration) linear infinite;
+  animation-delay: var(--float-delay);
+}
+.ticket-login-floater > svg { display: block; transform: rotate(var(--float-rotate)); }
+@keyframes ticket-login-float {
+  0% { transform: translate3d(0, 0, 0) rotate(0deg); opacity: 0; }
+  10% { opacity: var(--float-alpha); }
+  85% { opacity: var(--float-alpha); }
+  100% { transform: translate3d(var(--float-sway), -125vh, 0) rotate(var(--float-spin)); opacity: 0; }
+}
+
+/* Grain keeps the gradients from banding */
+.ticket-login-grain {
+  position: absolute; inset: 0; opacity: .035; mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ticket-login-orb, .ticket-login-beam { animation: none; }
+  .ticket-login-floater { display: none; }
+}
+
+/* ---------- Top-bar pills ---------- */
+.ticket-login-pill {
+  display: inline-flex; align-items: center;
+  height: 38px; padding: 3px;
+  background: color-mix(in srgb, var(--ticket-surface) 72%, transparent);
+  border: 1px solid var(--ticket-border);
+  border-radius: 999px;
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  backdrop-filter: blur(14px) saturate(1.4);
+}
+.ticket-login-pill-separator { width: 1px; height: 16px; margin: 0 2px; background: var(--ticket-border); }
+.ticket-login-pill-item,
+.ticket-login-pill button[aria-haspopup=listbox] {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 30px; min-height: 30px; min-width: 30px; padding: 0 10px;
+  border-radius: 999px;
+  color: var(--ticket-muted); font-size: 13px; font-weight: 600;
+  transition: background-color .2s, color .2s;
+}
+.ticket-login-pill-item:hover,
+.ticket-login-pill button[aria-haspopup=listbox]:hover { background: var(--ticket-raised); color: var(--ticket-text); }
+.ticket-login-pill-item:focus-visible { outline: 2px solid var(--ticket-accent); outline-offset: 2px; }
+.ticket-login-pill button[aria-haspopup=listbox] > svg { width: 12px; height: 12px; margin-left: -2px; opacity: .6; }
+.ticket-login-pill .ticket-picker-label { display: none; }
+.ticket-login-pill .ticket-picker-compact-label { display: inline; }
+.ticket-login-pill .ticket-theme-toggle { width: 30px; height: 30px; }
+.ticket-login-pill .ticket-theme-toggle svg { width: 16px; height: 16px; }
+.ticket-login-pill .ticket-theme-toggle:hover { background: var(--ticket-raised); color: var(--ticket-text); }
+@media (max-width: 639px) {
+  .ticket-login-pill-item { padding: 0; width: 30px; }
+}
+
+/* ---------- Segmented control (Sign in / Sign up) ---------- */
+.ticket-login-segmented {
+  position: relative;
+  display: grid; grid-template-columns: 1fr 1fr;
+  margin-bottom: 24px; padding: 3px;
+  background: var(--ticket-raised);
+  border-radius: 12px;
+}
+.ticket-login-segmented-thumb {
+  position: absolute; top: 3px; bottom: 3px; left: 3px;
+  width: calc(50% - 3px);
+  background: var(--ticket-surface);
+  border-radius: 9px;
+  box-shadow: 0 1px 2px rgb(21 28 39 / .06), 0 2px 8px rgb(21 28 39 / .06);
+  transition: transform .32s cubic-bezier(.3, .7, .2, 1);
+}
+:root[data-theme="dark"] .ticket-login-segmented-thumb { background: var(--ticket-hover); box-shadow: none; }
+.ticket-login-segmented[data-active="register"] .ticket-login-segmented-thumb { transform: translateX(100%); }
+.ticket-login-segmented > button {
+  position: relative; z-index: 1;
+  height: 36px; border-radius: 9px;
+  font-size: 14px; font-weight: 500; color: var(--ticket-muted);
+  transition: color .2s;
+}
+.ticket-login-segmented > button[aria-pressed="true"] { color: var(--ticket-text); font-weight: 600; }
+.ticket-login-segmented > button:focus-visible { outline: 2px solid var(--ticket-accent); outline-offset: -2px; }
+@media (prefers-reduced-motion: reduce) { .ticket-login-segmented-thumb { transition: none; } }

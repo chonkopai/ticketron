@@ -1,0 +1,174 @@
+# Production stack. Run from the repository root:
+#   docker compose -f deploy/docker-compose.yml up -d
+# Compose reads deploy/.env for both interpolation and the API env_file.
+name: ticketron
+
+x-log-limits: &log-limits
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ticketron
+      POSTGRES_USER: ticketron
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in deploy/.env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ticketron -d ticketron"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    logging: *log-limits
+
+  migrate:
+    image: ticketron:${RELEASE_TAG:-local}
+    profiles: ["tools"]
+    working_dir: /app/packages/database
+    command: ["node", "node_modules/prisma/build/index.js", "migrate", "deploy"]
+    environment:
+      DATABASE_URL: postgresql://ticketron:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in deploy/.env}@postgres:5432/ticketron?schema=public
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    logging: *log-limits
+
+  api:
+    image: ticketron:${RELEASE_TAG:-local}
+    init: true
+    restart: unless-stopped
+    working_dir: /app/apps/api
+    command: ["node", "dist/main.js"]
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      # Both come from deploy/.env; the API refuses to start with the mock provider or demo mode on a non-demo domain.
+      DEMO_MODE: ${DEMO_MODE:?Set DEMO_MODE (true or false) in deploy/.env}
+      API_PORT: "3001"
+      # Browser -> Caddy -> Next.js -> API. The API has no published host port.
+      API_TRUST_PROXY_HOPS: "2"
+      DATABASE_URL: postgresql://ticketron:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in deploy/.env}@postgres:5432/ticketron?schema=public
+      WEB_ORIGIN: https://${SITE_DOMAIN:?Set SITE_DOMAIN in deploy/.env}
+      POSTER_STORAGE_DIR: /data/posters
+      # OIDC credentials come from the API's runtime env_file, never Docker build args.
+      TELEGRAM_OIDC_ENABLED: ${TELEGRAM_OIDC_ENABLED:-false}
+      TELEGRAM_BOT_MESSAGES_ENABLED: ${TELEGRAM_BOT_MESSAGES_ENABLED:-true}
+      TELEGRAM_BOT_ORGANIZER_ENABLED: ${TELEGRAM_BOT_ORGANIZER_ENABLED:-true}
+      DRAFT_MEDIA_STORAGE_DIR: /data/draft-media
+      PRIVATE_SUPPORT_STORAGE_DIR: /data/private-support
+      STAFF_ENABLED: ${STAFF_ENABLED:-false}
+      ADMIN_ORIGIN: https://${ADMIN_DOMAIN:?Set ADMIN_DOMAIN in deploy/.env}
+      PAYMENT_PROVIDER_NAME: ${PAYMENT_PROVIDER_NAME:?Set PAYMENT_PROVIDER_NAME in deploy/.env}
+      TRANSACTIONAL_NOTIFICATIONS_ENABLED: ${TRANSACTIONAL_NOTIFICATIONS_ENABLED:-false}
+    volumes:
+      - poster_data:/data/posters
+      - draft_media_data:/data/draft-media
+      - private_support_data:/data/private-support
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+    logging: *log-limits
+
+  bot:
+    image: ticketron:${RELEASE_TAG:-local}
+    init: true
+    restart: unless-stopped
+    working_dir: /app/apps/bot
+    command: ["node", "dist/main.js"]
+    # No env_file: the bot is internet-facing, so it gets only the keys botEnvSchema reads
+    # (packages/config/src/index.ts), never the JWT, OTP, payment, staff or database secrets.
+    environment:
+      NODE_ENV: production
+      BOT_PORT: "3002"
+      API_BASE_URL: http://api:3001
+      WEB_ORIGIN: https://${SITE_DOMAIN:?Set SITE_DOMAIN in deploy/.env}
+      BOT_API_SECRET: ${BOT_API_SECRET:?Set BOT_API_SECRET in deploy/.env}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?Set TELEGRAM_BOT_TOKEN in deploy/.env}
+      TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:?Set TELEGRAM_BOT_USERNAME in deploy/.env}
+      TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:?Set TELEGRAM_WEBHOOK_SECRET in deploy/.env}
+      TELEGRAM_BOT_MESSAGES_ENABLED: ${TELEGRAM_BOT_MESSAGES_ENABLED:-true}
+      TELEGRAM_SEAT_MINI_APP_ENABLED: ${TELEGRAM_SEAT_MINI_APP_ENABLED:-false}
+      TELEGRAM_SEAT_MINI_APP_NAME: ${TELEGRAM_SEAT_MINI_APP_NAME:-seats}
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3002/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+    logging: *log-limits
+
+  web:
+    image: ticketron:${RELEASE_TAG:-local}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        SITE_DOMAIN: ${SITE_DOMAIN:?Set SITE_DOMAIN in deploy/.env}
+        TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:?Set TELEGRAM_BOT_USERNAME in deploy/.env}
+        NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${NEXT_PUBLIC_GOOGLE_CLIENT_ID:-}
+        NEXT_PUBLIC_YANDEX_MAPS_API_KEY: ${NEXT_PUBLIC_YANDEX_MAPS_API_KEY:-}
+        NEXT_PUBLIC_YANDEX_SUGGEST_API_KEY: ${NEXT_PUBLIC_YANDEX_SUGGEST_API_KEY:-}
+        NEXT_PUBLIC_YANDEX_GEOCODER_ENABLED: ${NEXT_PUBLIC_YANDEX_GEOCODER_ENABLED:-false}
+        NEXT_PUBLIC_GOOGLE_MAPS_EMBED_API_KEY: ${NEXT_PUBLIC_GOOGLE_MAPS_EMBED_API_KEY:-}
+        NEXT_PUBLIC_IP_GEOLOCATION_ENABLED: ${NEXT_PUBLIC_IP_GEOLOCATION_ENABLED:-false}
+    init: true
+    restart: unless-stopped
+    working_dir: /app/apps/web
+    command: ["node", "node_modules/next/dist/bin/next", "start", "--port", "3000", "--hostname", "0.0.0.0"]
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: https://${SITE_DOMAIN:?Set SITE_DOMAIN in deploy/.env}
+      NEXT_PUBLIC_TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:?Set TELEGRAM_BOT_USERNAME in deploy/.env}
+      API_INTERNAL_URL: http://api:3001
+      BOT_INTERNAL_URL: http://bot:3002
+      STAFF_ENABLED: ${STAFF_ENABLED:-false}
+      ADMIN_ORIGIN: https://${ADMIN_DOMAIN:?Set ADMIN_DOMAIN in deploy/.env}
+      STAFF_GATEWAY_SECRET: ${STAFF_GATEWAY_SECRET:-}
+      WEB_ORIGIN: https://${SITE_DOMAIN:?Set SITE_DOMAIN in deploy/.env}
+      YANDEX_GEOCODER_API_KEY: ${YANDEX_GEOCODER_API_KEY:-}
+    depends_on:
+      api:
+        condition: service_healthy
+      bot:
+        condition: service_healthy
+    logging: *log-limits
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:?Set SITE_DOMAIN in deploy/.env}
+      ADMIN_DOMAIN: ${ADMIN_DOMAIN:?Set ADMIN_DOMAIN in deploy/.env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      web:
+        condition: service_started
+    logging: *log-limits
+
+volumes:
+  postgres_data:
+  poster_data:
+  draft_media_data:
+  private_support_data:
+  caddy_data:
+  caddy_config:
